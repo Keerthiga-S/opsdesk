@@ -258,7 +258,8 @@ pipeline {
                             -Dsonar.tests=backend/tests \
                             -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
                             -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/.venv/**,**/__pycache__/**,**/tests/**" \
-                            -Dsonar.scanner.metadataFilePath=.scannerwork/report-task.txt \
+                            -Dsonar.working.directory="${WORKSPACE}/.scannerwork" \
+                            -Dsonar.scanner.metadataFilePath="${WORKSPACE}/.scannerwork/report-task.txt" \
                             -Dsonar.qualitygate.wait=true \
                             -Dsonar.qualitygate.timeout=300
 

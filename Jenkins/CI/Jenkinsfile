@@ -228,6 +228,7 @@ pipeline {
         // ---------------------------------------------------------
         // 5. SAST SONARQUBE ANALYSIS
         // ---------------------------------------------------------
+        
         stage('SAST SonarQube Analysis') {
             steps {
                 withCredentials([
@@ -241,23 +242,31 @@ pipeline {
 
                         echo "Starting OpsDesk SonarQube analysis..."
 
+                        mkdir -p .scannerwork
+
                         docker run --rm \
                             --network host \
                             --volumes-from "${JENKINS_CONTAINER}" \
                             -w "${WORKSPACE}" \
-                            -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
                             -e SONAR_TOKEN="${SONAR_TOKEN}" \
                             sonarsource/sonar-scanner-cli:latest \
+                            -Dsonar.host.url="${SONAR_HOST_URL}" \
+                            -Dsonar.token="${SONAR_TOKEN}" \
                             -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
                             -Dsonar.projectName="OpsDesk" \
                             -Dsonar.sources=backend,src \
                             -Dsonar.tests=backend/tests \
                             -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
                             -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/.venv/**,**/__pycache__/**,**/tests/**" \
+                            -Dsonar.scanner.metadataFilePath=.scannerwork/report-task.txt \
                             -Dsonar.qualitygate.wait=true \
                             -Dsonar.qualitygate.timeout=300
 
-                        echo "SonarQube analysis and Quality Gate polling completed."
+                        echo "Checking SonarQube analysis report..."
+
+                        test -s .scannerwork/report-task.txt
+
+                        echo "SonarQube analysis report generated successfully."
                     '''
                 }
             }
@@ -271,37 +280,42 @@ pipeline {
             }
         }
 
+
         // ---------------------------------------------------------
         // 6. QUALITY GATE CHECK
         // ---------------------------------------------------------
+        
         stage('Quality Gate Check') {
             steps {
-                script {
-                    // The SonarScanner stage above uses
-                    // sonar.qualitygate.wait=true.
-                    // It fails the pipeline if the Quality Gate fails.
-                    sh '''
-                        set -e
+                sh '''
+                    set -e
 
-                        if [ ! -f .scannerwork/report-task.txt ]; then
-                            echo "SonarQube report-task.txt was not generated."
-                            exit 1
-                        fi
+                    echo "Checking SonarQube analysis report..."
 
-                        echo "SonarQube Quality Gate polling completed."
-                        echo "A failed Quality Gate would already have failed the SAST stage."
-                    '''
-                }
+                    if [ ! -s .scannerwork/report-task.txt ]; then
+                        echo "SonarQube report-task.txt is missing or empty."
+                        exit 1
+                    fi
+
+                    echo "SonarQube report-task.txt exists."
+
+                    grep -E 'ceTaskId|dashboardUrl|serverUrl' \
+                        .scannerwork/report-task.txt || true
+
+                    echo "Quality Gate polling was performed by the SonarScanner."
+                    echo "If the Quality Gate failed, the SAST stage would fail."
+                '''
             }
             post {
                 failure {
                     echo 'SonarQube Quality Gate check failed.'
                 }
                 success {
-                    echo 'SonarQube Quality Gate passed.'
+                    echo 'SonarQube Quality Gate check completed successfully.'
                 }
             }
         }
+
 
         // ---------------------------------------------------------
         // 7. DEPENDENCY SCAN

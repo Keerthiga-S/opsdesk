@@ -1,0 +1,642 @@
+
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        // Both images are stored in one Docker Hub repository.
+        DOCKERHUB_IMAGE = 'iitmpravartak/opsdesk'
+
+        // Jenkins container name.
+        // This allows temporary tool containers to access the Jenkins workspace.
+        JENKINS_CONTAINER = 'jenkins'
+
+        // SonarQube details
+        SONAR_HOST_URL = 'http://192.168.200.16:9000'
+        SONAR_PROJECT_KEY = 'opsdesk'
+
+        // Temporary CI test services
+        CI_NETWORK = "opsdesk-ci-${BUILD_NUMBER}"
+        POSTGRES_CONTAINER = "opsdesk-ci-postgres-${BUILD_NUMBER}"
+        REDIS_CONTAINER = "opsdesk-ci-redis-${BUILD_NUMBER}"
+
+        // Docker image tag for this build
+        IMAGE_TAG = "${BUILD_NUMBER}"
+    }
+
+    stages {
+
+        // ---------------------------------------------------------
+        // 1. CLEAN WORKSPACE
+        // ---------------------------------------------------------
+        stage('Clean Workspace') {
+            when { branch 'Prod' }
+            steps {
+                cleanWs()
+                echo 'Workspace cleaned successfully.'
+            }
+            post {
+                failure {
+                    echo 'Workspace cleanup failed.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 2. CHECKOUT SCM
+        // ---------------------------------------------------------
+        stage('Checkout SCM') {
+            when { branch 'Prod' }
+            steps {
+                checkout scm
+
+                sh '''
+                    echo "Current branch: ${BRANCH_NAME}"
+                    echo "Build number: ${BUILD_NUMBER}"
+                    echo "Workspace: ${WORKSPACE}"
+
+                    echo "Repository files:"
+                    ls -la
+                '''
+            }
+            post {
+                failure {
+                    echo 'Source code checkout failed.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 3. UNIT TESTING & COVERAGE
+        // ---------------------------------------------------------
+        stage('Unit Testing & Coverage') {
+            when { branch 'Prod' }
+            steps {
+                script {
+                    sh '''
+                        set -e
+
+                        mkdir -p reports
+
+                        # Remove any leftover test containers/network
+                        docker rm -f "${POSTGRES_CONTAINER}" "${REDIS_CONTAINER}" 2>/dev/null || true
+                        docker network rm "${CI_NETWORK}" 2>/dev/null || true
+
+                        # Create an isolated Docker network for CI tests
+                        docker network create "${CI_NETWORK}"
+
+                        # Start temporary PostgreSQL 16 with pgvector
+                        docker run -d \
+                            --name "${POSTGRES_CONTAINER}" \
+                            --network "${CI_NETWORK}" \
+                            --network-alias postgres \
+                            -e POSTGRES_USER=postgres \
+                            -e POSTGRES_PASSWORD=postgres \
+                            -e POSTGRES_DB=postgres \
+                            pgvector/pgvector:pg16
+
+                        # Start temporary Redis
+                        docker run -d \
+                            --name "${REDIS_CONTAINER}" \
+                            --network "${CI_NETWORK}" \
+                            --network-alias redis \
+                            redis:7-alpine
+
+                        # Wait for PostgreSQL to become ready
+                        echo "Waiting for PostgreSQL..."
+
+                        for i in $(seq 1 30); do
+                            if docker exec "${POSTGRES_CONTAINER}" \
+                                pg_isready -U postgres >/dev/null 2>&1; then
+                                break
+                            fi
+                            sleep 2
+                        done
+
+                        docker exec "${POSTGRES_CONTAINER}" \
+                            pg_isready -U postgres
+
+                        # Wait for Redis to become ready
+                        echo "Waiting for Redis..."
+
+                        for i in $(seq 1 30); do
+                            if docker exec "${REDIS_CONTAINER}" \
+                                redis-cli ping 2>/dev/null | grep -q PONG; then
+                                break
+                            fi
+                            sleep 2
+                        done
+
+                        docker exec "${REDIS_CONTAINER}" redis-cli ping
+
+                        # Run backend tests in Python 3.12
+                        # The test fixture creates/recreates only opsdesk_test
+                        # inside this disposable PostgreSQL container.
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            --network "${CI_NETWORK}" \
+                            -w "${WORKSPACE}/backend" \
+                            -e OPSDESK_TEST_ADMIN_URL="postgresql://postgres:postgres@postgres:5432/postgres" \
+                            -e OPSDESK_TEST_REDIS_URL="redis://redis:6379/15" \
+                            python:3.12-slim \
+                            bash -lc '
+                                set -e
+
+                                python -m pip install --upgrade pip
+                                pip install -r requirements.txt
+                                pip install pytest-cov
+
+                                python -m pytest \
+                                    --cov=app \
+                                    --cov-report=xml:coverage.xml \
+                                    --junitxml=test-results.xml
+                            '
+
+                        # Run frontend tests and production build
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            -w "${WORKSPACE}" \
+                            node:22-alpine \
+                            sh -lc '
+                                set -e
+
+                                npm ci --no-audit --no-fund
+                                npm test
+                                npm run build
+                            '
+                    '''
+                }
+            }
+            post {
+                always {
+                    sh '''
+                        docker rm -f "${POSTGRES_CONTAINER}" "${REDIS_CONTAINER}" 2>/dev/null || true
+                        docker network rm "${CI_NETWORK}" 2>/dev/null || true
+                    '''
+                }
+                failure {
+                    echo 'Unit testing or coverage generation failed.'
+                }
+                success {
+                    echo 'Backend tests, frontend tests and frontend build completed successfully.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 4. DOCKER LINTING
+        // ---------------------------------------------------------
+        stage('Docker Linting') {
+            when { branch 'Prod' }
+            steps {
+                sh '''
+                    set -e
+
+                    mkdir -p reports
+
+                    echo "Linting backend Dockerfile..."
+
+                    docker run --rm \
+                        --volumes-from "${JENKINS_CONTAINER}" \
+                        -w "${WORKSPACE}" \
+                        hadolint/hadolint:v2.12.0-debian \
+                        hadolint --format json backend/Dockerfile \
+                        > reports/backend-hadolint.json || true
+
+                    echo "Linting frontend Dockerfile..."
+
+                    docker run --rm \
+                        --volumes-from "${JENKINS_CONTAINER}" \
+                        -w "${WORKSPACE}" \
+                        hadolint/hadolint:v2.12.0-debian \
+                        hadolint --format json Dockerfile \
+                        > reports/frontend-hadolint.json || true
+
+                    echo "Docker lint reports generated."
+                '''
+            }
+            post {
+                failure {
+                    echo 'Docker linting stage failed.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 5. SAST SONARQUBE ANALYSIS
+        // ---------------------------------------------------------
+        
+        stage('SAST SonarQube Analysis') {
+            when { branch 'Prod' }
+            steps {
+                withCredentials([
+                    string(
+                        credentialsId: 'sonarqube-token',
+                        variable: 'SONAR_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Starting OpsDesk SonarQube analysis..."
+
+                        mkdir -p .scannerwork
+
+                        docker run --rm \
+                            --network host \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            -w "${WORKSPACE}" \
+                            -e SONAR_TOKEN="${SONAR_TOKEN}" \
+                            sonarsource/sonar-scanner-cli:latest \
+                            -Dsonar.host.url="${SONAR_HOST_URL}" \
+                            -Dsonar.token="${SONAR_TOKEN}" \
+                            -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
+                            -Dsonar.projectName="OpsDesk" \
+                            -Dsonar.sources=backend,src \
+                            -Dsonar.tests=backend/tests \
+                            -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
+                            -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/.venv/**,**/__pycache__/**,**/tests/**" \
+                            -Dsonar.working.directory="${WORKSPACE}/.scannerwork" \
+                            -Dsonar.scanner.metadataFilePath="${WORKSPACE}/.scannerwork/report-task.txt" \
+                            -Dsonar.qualitygate.wait=true \
+                            -Dsonar.qualitygate.timeout=300
+
+                        echo "Checking SonarQube analysis report..."
+
+                        test -s .scannerwork/report-task.txt
+
+                        echo "SonarQube analysis report generated successfully."
+                    '''
+                }
+            }
+            post {
+                failure {
+                    echo 'SonarQube SAST analysis failed.'
+                }
+                success {
+                    echo 'SonarQube analysis completed successfully.'
+                }
+            }
+        }
+
+
+        // ---------------------------------------------------------
+        // 6. QUALITY GATE CHECK
+        // ---------------------------------------------------------
+        
+        stage('Quality Gate Check') {
+            when { branch 'Prod' }
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Checking SonarQube analysis report..."
+
+                    if [ ! -s .scannerwork/report-task.txt ]; then
+                        echo "SonarQube report-task.txt is missing or empty."
+                        exit 1
+                    fi
+
+                    echo "SonarQube report-task.txt exists."
+
+                    grep -E 'ceTaskId|dashboardUrl|serverUrl' \
+                        .scannerwork/report-task.txt || true
+
+                    echo "Quality Gate polling was performed by the SonarScanner."
+                    echo "If the Quality Gate failed, the SAST stage would fail."
+                '''
+            }
+            post {
+                failure {
+                    echo 'SonarQube Quality Gate check failed.'
+                }
+                success {
+                    echo 'SonarQube Quality Gate check completed successfully.'
+                }
+            }
+        }
+
+
+        // ---------------------------------------------------------
+        // 7. DEPENDENCY SCAN
+        // ---------------------------------------------------------
+        stage('Dependency Scan') {
+            when { branch 'Prod' }
+            steps {
+                sh '''
+                    set -e
+
+                    mkdir -p reports
+
+                    echo "Running Trivy filesystem and dependency scan..."
+
+                    # Generate a complete JSON report
+                    docker run --rm \
+                        --volumes-from "${JENKINS_CONTAINER}" \
+                        -w "${WORKSPACE}" \
+                        aquasec/trivy:0.58.2 \
+                        fs \
+                        --scanners vuln,misconfig,secret \
+                        --skip-dirs .git \
+                        --skip-dirs node_modules \
+                        --skip-dirs dist \
+                        --format json \
+                        --output reports/dependency-scan.json \
+                        .
+
+                    # Fail the build for unfixed HIGH and CRITICAL findings
+                    docker run --rm \
+                        --volumes-from "${JENKINS_CONTAINER}" \
+                        -w "${WORKSPACE}" \
+                        aquasec/trivy:0.58.2 \
+                        fs \
+                        --scanners vuln,misconfig,secret \
+                        --skip-dirs .git \
+                        --skip-dirs node_modules \
+                        --skip-dirs dist \
+                        --ignore-unfixed \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        .
+                '''
+            }
+            post {
+                failure {
+                    echo 'Dependency scan failed. Check the Trivy report for HIGH or CRITICAL findings.'
+                }
+                success {
+                    echo 'Dependency scan completed successfully.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 8. BUILD DOCKER IMAGES
+        // ---------------------------------------------------------
+        stage('Build Docker Image') {
+            when { branch 'Prod' }
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Building OpsDesk backend image..."
+
+                    docker build \
+                        -t "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}" \
+                        -f backend/Dockerfile \
+                        backend
+
+                    echo "Building OpsDesk frontend image..."
+
+                    docker build \
+                        -t "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}" \
+                        -f Dockerfile \
+                        .
+
+                    echo "Docker images built successfully."
+
+                    docker images | grep opsdesk
+                '''
+            }
+            post {
+                failure {
+                    echo 'Docker image build failed.'
+                }
+                success {
+                    echo 'OpsDesk backend and frontend Docker images built successfully.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 9. TRIVY IMAGE SCANNING
+        // ---------------------------------------------------------
+        stage('Trivy Image Scanning') {
+            when { branch 'Prod' }
+            steps {
+                sh '''
+                    set -e
+
+                    mkdir -p reports
+
+                    echo "Scanning backend Docker image..."
+
+                    # Full backend image report
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        --volumes-from "${JENKINS_CONTAINER}" \
+                        -w "${WORKSPACE}" \
+                        aquasec/trivy:0.58.2 \
+                        image \
+                        --format json \
+                        --output reports/backend-image-scan.json \
+                        "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+
+                    # Security gate for backend image
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        aquasec/trivy:0.58.2 \
+                        image \
+                        --ignore-unfixed \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+
+                    echo "Scanning frontend Docker image..."
+
+                    # Full frontend image report
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        --volumes-from "${JENKINS_CONTAINER}" \
+                        -w "${WORKSPACE}" \
+                        aquasec/trivy:0.58.2 \
+                        image \
+                        --format json \
+                        --output reports/frontend-image-scan.json \
+                        "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+
+                    # Security gate for frontend image
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        aquasec/trivy:0.58.2 \
+                        image \
+                        --ignore-unfixed \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+
+                    echo "Backend and frontend image scans completed."
+                '''
+            }
+            post {
+                failure {
+                    echo 'Trivy image scanning failed. Check the image scan reports.'
+                }
+                success {
+                    echo 'Trivy image scanning completed successfully.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 10. PROMOTE & PUSH TO REGISTRY
+        // ---------------------------------------------------------
+        stage('Promote & Push to Registry') {
+            when { branch 'Prod' }
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKERHUB_USER',
+                        passwordVariable: 'DOCKERHUB_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Logging in to Docker Hub..."
+
+                        echo "${DOCKERHUB_PASSWORD}" | docker login \
+                            --username "${DOCKERHUB_USER}" \
+                            --password-stdin
+
+                        # Add application-specific build tags and latest tags.
+                        docker tag \
+                            "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}" \
+                            "${DOCKERHUB_IMAGE}:backend-latest"
+
+                        docker tag \
+                            "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}" \
+                            "${DOCKERHUB_IMAGE}:frontend-latest"
+
+                        # Push backend build and latest tags
+                        docker push "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+                        docker push "${DOCKERHUB_IMAGE}:backend-latest"
+
+                        # Push frontend build and latest tags
+                        docker push "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+                        docker push "${DOCKERHUB_IMAGE}:frontend-latest"
+
+                        docker logout
+
+                        echo "Both OpsDesk images pushed successfully."
+                    '''
+                }
+            }
+            post {
+                failure {
+                    echo 'Docker Hub image promotion or push failed.'
+                }
+                success {
+                    echo 'OpsDesk backend and frontend images pushed to Docker Hub.'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 11. SIGN IMAGE
+        // ---------------------------------------------------------
+        stage('Sign Image') {
+            when { branch 'Prod' }
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: 'cosign-private-key',
+                        variable: 'COSIGN_KEY'
+                    ),
+                    string(
+                        credentialsId: 'cosign-passphrase',
+                        variable: 'COSIGN_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Signing OpsDesk Docker images with Cosign..."
+
+                        # Sign backend build and latest tags
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
+                            gcr.io/projectsigstore/cosign:v2.4.1 \
+                            sign --yes \
+                            --key "${COSIGN_KEY}" \
+                            "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
+                            gcr.io/projectsigstore/cosign:v2.4.1 \
+                            sign --yes \
+                            --key "${COSIGN_KEY}" \
+                            "${DOCKERHUB_IMAGE}:backend-latest"
+
+                        # Sign frontend build and latest tags
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
+                            gcr.io/projectsigstore/cosign:v2.4.1 \
+                            sign --yes \
+                            --key "${COSIGN_KEY}" \
+                            "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
+                            gcr.io/projectsigstore/cosign:v2.4.1 \
+                            sign --yes \
+                            --key "${COSIGN_KEY}" \
+                            "${DOCKERHUB_IMAGE}:frontend-latest"
+
+                        echo "All OpsDesk images signed successfully."
+                    '''
+                }
+            }
+            post {
+                failure {
+                    echo 'Cosign image signing failed. The CI pipeline cannot be considered successful.'
+                }
+                success {
+                    echo 'OpsDesk backend and frontend Docker images signed successfully.'
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------
+    // GLOBAL POST ACTIONS
+    // -------------------------------------------------------------
+    post {
+        always {
+            echo 'OpsDesk CI pipeline execution completed.'
+
+            archiveArtifacts(
+                artifacts: 'reports/**,backend/coverage.xml,backend/test-results.xml',
+                allowEmptyArchive: true
+            )
+        }
+
+        success {
+            echo 'SUCCESS: OpsDesk CI pipeline completed successfully.'
+        }
+
+        failure {
+            echo 'FAILURE: OpsDesk CI pipeline failed. Check the failed stage and Jenkins console output.'
+        }
+
+        cleanup {
+            sh '''
+                docker logout >/dev/null 2>&1 || true
+            '''
+        }
+    }
+}

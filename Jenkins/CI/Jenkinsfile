@@ -152,7 +152,8 @@ pipeline {
                                 pip install pytest-cov
 
                                 python -m pytest \
-                                    --cov=app \
+                                    --cov=opsdesk \
+                                    --cov-report=term-missing \
                                     --cov-report=xml:coverage.xml \
                                     --junitxml=test-results.xml
                             '

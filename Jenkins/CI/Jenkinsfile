@@ -1,4 +1,6 @@
 
+// OpsDesk CI pipeline: runs only on the Prod branch after merge.
+// CD deployment is intentionally not included in this CI Jenkinsfile.
 pipeline {
     agent any
 
@@ -35,7 +37,10 @@ pipeline {
         // 1. CLEAN WORKSPACE
         // ---------------------------------------------------------
         stage('Clean Workspace') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 cleanWs()
                 echo 'Workspace cleaned successfully.'
             }
@@ -50,7 +55,10 @@ pipeline {
         // 2. CHECKOUT SCM
         // ---------------------------------------------------------
         stage('Checkout SCM') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 checkout scm
 
                 sh '''
@@ -73,7 +81,10 @@ pipeline {
         // 3. UNIT TESTING & COVERAGE
         // ---------------------------------------------------------
         stage('Unit Testing & Coverage') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 script {
                     sh '''
                         set -e
@@ -189,7 +200,10 @@ pipeline {
         // 4. DOCKER LINTING
         // ---------------------------------------------------------
         stage('Docker Linting') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 sh '''
                     set -e
 
@@ -228,7 +242,10 @@ pipeline {
         // ---------------------------------------------------------
         
         stage('SAST SonarQube Analysis') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 withCredentials([
                     string(
                         credentialsId: 'sonarqube-token',
@@ -285,7 +302,10 @@ pipeline {
         // ---------------------------------------------------------
         
         stage('Quality Gate Check') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 sh '''
                     set -e
 
@@ -320,7 +340,10 @@ pipeline {
         // 7. DEPENDENCY SCAN
         // ---------------------------------------------------------
         stage('Dependency Scan') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 sh '''
                     set -e
 
@@ -372,7 +395,10 @@ pipeline {
         // 8. BUILD DOCKER IMAGES
         // ---------------------------------------------------------
         stage('Build Docker Image') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 sh '''
                     set -e
 
@@ -409,7 +435,10 @@ pipeline {
         // 9. TRIVY IMAGE SCANNING
         // ---------------------------------------------------------
         stage('Trivy Image Scanning') {
-            steps {
+            when {
+                branch 'Prod'
+            }
+steps {
                 sh '''
                     set -e
 
@@ -479,7 +508,10 @@ pipeline {
         // ---------------------------------------------------------
         stage('Promote & Push to Registry') {
             when {
-                branch 'Dev'
+                branch 'Prod'
+            }
+when {
+                branch 'Prod'
             }
             steps {
                 withCredentials([
@@ -536,7 +568,10 @@ pipeline {
         // ---------------------------------------------------------
         stage('Sign Image') {
             when {
-                branch 'Dev'
+                branch 'Prod'
+            }
+when {
+                branch 'Prod'
             }
             steps {
                 withCredentials([

@@ -9,10 +9,8 @@ pipeline {
     }
 
     environment {
-        // Docker Hub image names
-        DOCKERHUB_NAMESPACE = 'iitmpravartak'
-        BACKEND_IMAGE = 'iitmpravartak/opsdesk-backend'
-        FRONTEND_IMAGE = 'iitmpravartak/opsdesk-frontend'
+        // Both images are stored in one Docker Hub repository.
+        DOCKERHUB_IMAGE = 'iitmpravartak/opsdesk'
 
         // Jenkins container name.
         // This allows temporary tool containers to access the Jenkins workspace.
@@ -381,14 +379,14 @@ pipeline {
                     echo "Building OpsDesk backend image..."
 
                     docker build \
-                        -t "${BACKEND_IMAGE}:${IMAGE_TAG}" \
+                        -t "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}" \
                         -f backend/Dockerfile \
                         backend
 
                     echo "Building OpsDesk frontend image..."
 
                     docker build \
-                        -t "${FRONTEND_IMAGE}:${IMAGE_TAG}" \
+                        -t "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}" \
                         -f Dockerfile \
                         .
 
@@ -428,7 +426,7 @@ pipeline {
                         image \
                         --format json \
                         --output reports/backend-image-scan.json \
-                        "${BACKEND_IMAGE}:${IMAGE_TAG}"
+                        "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
 
                     # Security gate for backend image
                     docker run --rm \
@@ -438,7 +436,7 @@ pipeline {
                         --ignore-unfixed \
                         --severity HIGH,CRITICAL \
                         --exit-code 1 \
-                        "${BACKEND_IMAGE}:${IMAGE_TAG}"
+                        "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
 
                     echo "Scanning frontend Docker image..."
 
@@ -451,7 +449,7 @@ pipeline {
                         image \
                         --format json \
                         --output reports/frontend-image-scan.json \
-                        "${FRONTEND_IMAGE}:${IMAGE_TAG}"
+                        "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
 
                     # Security gate for frontend image
                     docker run --rm \
@@ -461,7 +459,7 @@ pipeline {
                         --ignore-unfixed \
                         --severity HIGH,CRITICAL \
                         --exit-code 1 \
-                        "${FRONTEND_IMAGE}:${IMAGE_TAG}"
+                        "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
 
                     echo "Backend and frontend image scans completed."
                 '''
@@ -500,22 +498,22 @@ pipeline {
                             --username "${DOCKERHUB_USER}" \
                             --password-stdin
 
-                        # Add build-number and latest tags
+                        # Add application-specific build tags and latest tags.
                         docker tag \
-                            "${BACKEND_IMAGE}:${IMAGE_TAG}" \
-                            "${BACKEND_IMAGE}:latest"
+                            "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}" \
+                            "${DOCKERHUB_IMAGE}:backend-latest"
 
                         docker tag \
-                            "${FRONTEND_IMAGE}:${IMAGE_TAG}" \
-                            "${FRONTEND_IMAGE}:latest"
+                            "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}" \
+                            "${DOCKERHUB_IMAGE}:frontend-latest"
 
-                        # Push backend images
-                        docker push "${BACKEND_IMAGE}:${IMAGE_TAG}"
-                        docker push "${BACKEND_IMAGE}:latest"
+                        # Push backend build and latest tags
+                        docker push "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+                        docker push "${DOCKERHUB_IMAGE}:backend-latest"
 
-                        # Push frontend images
-                        docker push "${FRONTEND_IMAGE}:${IMAGE_TAG}"
-                        docker push "${FRONTEND_IMAGE}:latest"
+                        # Push frontend build and latest tags
+                        docker push "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+                        docker push "${DOCKERHUB_IMAGE}:frontend-latest"
 
                         docker logout
 
@@ -564,7 +562,7 @@ pipeline {
                             gcr.io/projectsigstore/cosign:v2.4.1 \
                             sign --yes \
                             --key "${COSIGN_KEY}" \
-                            "${BACKEND_IMAGE}:${IMAGE_TAG}"
+                            "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
 
                         docker run --rm \
                             --volumes-from "${JENKINS_CONTAINER}" \
@@ -573,7 +571,7 @@ pipeline {
                             gcr.io/projectsigstore/cosign:v2.4.1 \
                             sign --yes \
                             --key "${COSIGN_KEY}" \
-                            "${BACKEND_IMAGE}:latest"
+                            "${DOCKERHUB_IMAGE}:backend-latest"
 
                         # Sign frontend build and latest tags
                         docker run --rm \
@@ -583,7 +581,7 @@ pipeline {
                             gcr.io/projectsigstore/cosign:v2.4.1 \
                             sign --yes \
                             --key "${COSIGN_KEY}" \
-                            "${FRONTEND_IMAGE}:${IMAGE_TAG}"
+                            "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
 
                         docker run --rm \
                             --volumes-from "${JENKINS_CONTAINER}" \
@@ -592,7 +590,7 @@ pipeline {
                             gcr.io/projectsigstore/cosign:v2.4.1 \
                             sign --yes \
                             --key "${COSIGN_KEY}" \
-                            "${FRONTEND_IMAGE}:latest"
+                            "${DOCKERHUB_IMAGE}:frontend-latest"
 
                         echo "All OpsDesk images signed successfully."
                     '''

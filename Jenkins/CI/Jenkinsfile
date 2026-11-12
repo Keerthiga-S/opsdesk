@@ -167,7 +167,7 @@ pipeline {
                                 set -e
 
                                 npm ci --no-audit --no-fund
-                                npm test
+                                npm run test:coverage
                                 npm run build
                             '
                     '''
@@ -261,6 +261,7 @@ pipeline {
                             -Dsonar.sources=backend,src \
                             -Dsonar.tests=backend/tests \
                             -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
+                            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
                             -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/.venv/**,**/__pycache__/**,**/tests/**" \
                             -Dsonar.working.directory="${WORKSPACE}/.scannerwork" \
                             -Dsonar.scanner.metadataFilePath="${WORKSPACE}/.scannerwork/report-task.txt" \
@@ -621,7 +622,7 @@ pipeline {
             echo 'OpsDesk CI pipeline execution completed.'
 
             archiveArtifacts(
-                artifacts: 'reports/**,backend/coverage.xml,backend/test-results.xml',
+                artifacts: 'reports/**,backend/coverage.xml,backend/test-results.xml,coverage/lcov.info',
                 allowEmptyArchive: true
             )
         }

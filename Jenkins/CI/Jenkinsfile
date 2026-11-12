@@ -262,7 +262,7 @@ pipeline {
                             -Dsonar.tests=backend/tests \
                             -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
                             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
-                            -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/.venv/**,**/__pycache__/**,**/tests/**" \
+                            -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/.venv/**,**/__pycache__/**,**/tests/**,**/*.test.js,**/*.spec.js" \
                             -Dsonar.working.directory="${WORKSPACE}/.scannerwork" \
                             -Dsonar.scanner.metadataFilePath="${WORKSPACE}/.scannerwork/report-task.txt" \
                             -Dsonar.qualitygate.wait=true \

@@ -27,7 +27,7 @@ export function ticketBody({ form, type, custom, mobile }) {
 /** The server's field errors as one message per field, or a single form-level message. */
 export function createErrors(error) {
   if (error?.data && typeof error.data === "object") {
-    return Object.fromEntries(Object.entries(error.data).map(([key, value]) => [key, [].concat(value).join(" ")]));
+    return Object.fromEntries(Object.entries(error.data).map(([key, value]) => [key, [value].flat().join(" ")]));
   }
   return { form: error?.message };
 }

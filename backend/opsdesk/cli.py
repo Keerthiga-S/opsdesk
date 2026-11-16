@@ -16,7 +16,6 @@ from __future__ import annotations
 import getpass
 import json
 import secrets
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -351,4 +350,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

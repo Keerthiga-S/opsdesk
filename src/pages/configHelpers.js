@@ -74,7 +74,7 @@ export function toInput(spec, value) {
   if (JSON_KINDS.has(spec.kind)) return value === undefined || value === null ? (spec.kind === "json_list" ? "[]" : "{}") : prettyJson(value);
   if (spec.kind === "bool") return Boolean(value);
   if (spec.kind === "id_list") return Array.isArray(value) ? value : [];
-  if (value === null || value === undefined) return spec.kind === "fk" ? "" : "";
+  if (value === null || value === undefined) return "";
   return value;
 }
 

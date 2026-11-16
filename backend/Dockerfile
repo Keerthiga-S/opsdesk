@@ -13,7 +13,11 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY . .
+COPY alembic.ini pytest.ini entrypoint.sh healthcheck.sh ./
+COPY alembic ./alembic
+COPY opsdesk ./opsdesk
+COPY sql ./sql
+COPY tests ./tests
 RUN useradd --create-home --uid 10001 --user-group opsdesk \
  && mkdir -p /app/media \
  && chown -R opsdesk /app \

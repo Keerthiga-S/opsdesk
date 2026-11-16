@@ -30,7 +30,7 @@ export function validateCatalogForm(schema, values = {}) {
     }
 
     if (val !== undefined && val !== null && val !== "") {
-      if (field.type === "number" && isNaN(Number(val))) {
+      if (field.type === "number" && Number.isNaN(Number(val))) {
         errors[field.name] = `${field.label || field.name} must be a valid number.`;
       }
       if (field.type === "select" && Array.isArray(field.options) && field.options.length > 0) {

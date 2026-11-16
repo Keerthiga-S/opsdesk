@@ -62,14 +62,16 @@ test("a draft counts as accepted only when a public reply is sent, and says whet
 });
 
 test("nothing is recorded for an internal note or when no draft was used", () => {
-  const api = () => { throw new Error("must not be called"); };
+  let calls = 0;
+  const api = () => { calls += 1; return Promise.resolve(); };
   recordDraftUse(api, 12, { text: "Hi", sources: [] }, { kind: "internal", body: "Hi" });
   recordDraftUse(api, 12, null, { kind: "public", body: "Typed by hand" });
+  assert.equal(calls, 0);
 });
 
 test("failing to record never disturbs the reply that was sent", async () => {
   const api = () => Promise.reject(new Error("feedback endpoint down"));
-  recordDraftUse(api, 12, { text: "Hi", sources: [] }, { kind: "public", body: "Hi" }); // must not throw or leave a rejection behind
+  assert.doesNotThrow(() => recordDraftUse(api, 12, { text: "Hi", sources: [] }, { kind: "public", body: "Hi" })); // and leaves no rejection behind
   await new Promise((resolve) => setImmediate(resolve));
 });
 

@@ -98,6 +98,7 @@ class Ticket(TenantOwned, Base):
     # AI
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     ai_summary: Mapped[str] = mapped_column(Text, default="")
+    ai_summary_method: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "ai" | "template"; NULL = unknown
     ai_triage: Mapped[dict] = mapped_column(JSONB, default=dict)
 
     created_at: Mapped[datetime] = created_column(index=True)

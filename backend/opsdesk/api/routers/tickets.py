@@ -41,7 +41,8 @@ from ..tenant_context import tenant_transaction
 router = APIRouter(tags=["tickets"])
 
 LINK_TYPES = ("related", "duplicate_of", "caused_by", "blocks")
-MAJOR_DENIED = "Only team leads, managers and the super admin can declare or coordinate a major incident."
+SUBJECT_MAX = 300  # the width of tickets_ticket.subject
+MAJOR_DENIED ="Only team leads, managers and the super admin can declare or coordinate a major incident."
 
 
 def _bad(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
@@ -50,6 +51,32 @@ def _bad(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
 
 def _not_found(detail: str = "Not found.") -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+
+
+def _clean_subject(value) -> str:
+    """The subject as it is stored: trimmed, never empty and no longer than the column. The web form checks the same
+    things; this is for callers that do not go through it."""
+    subject = (value or "").strip()
+    if not subject:
+        raise _bad("Add a short summary of the problem or request.")
+    if len(subject) > SUBJECT_MAX:
+        raise _bad(f"The summary can be at most {SUBJECT_MAX} characters.")
+    return subject
+
+
+def _clean_text_fields(data: dict) -> None:
+    """Tidy the text an update carries, in place: the subject as in ``_clean_subject``; a null description clears it."""
+    if "subject" in data:
+        data["subject"] = _clean_subject(data["subject"])
+    if "description" in data and data["description"] is None:
+        data["description"] = ""
+
+
+def _refuse_reply_with_nothing_in_it(body: str, files: list, errors: list) -> None:
+    """A reply with no text whose every file was refused has nothing to post: say why instead. The caller's
+    transaction is rolled back, so an empty "(attachment)" message is never stored or sent."""
+    if not body and len(errors) == len(files):
+        raise _bad("; ".join(errors))
 
 
 def _build_pagination_url(request: Request, target_page: int) -> str:
@@ -327,6 +354,7 @@ async def create_ticket(payload: TicketCreateRequest, user: AuthenticatedUser = 
             raise _bad("Invalid ticket type.")
         if not actor.is_agent and not ttype.customer_can_create:
             raise _bad("Customers cannot create this ticket type.", status.HTTP_403_FORBIDDEN)
+        subject = _clean_subject(payload.subject)
 
         requester = None
         if payload.requester:
@@ -343,7 +371,7 @@ async def create_ticket(payload: TicketCreateRequest, user: AuthenticatedUser = 
         if not actor.is_agent:
             custom_fields = _customer_editable_fields(s, custom_fields, ttype.id)
         created = services.create_ticket(
-            s, tenant_id=user.tenant_id, ticket_type=ttype, subject=payload.subject, description=payload.description,
+            s, tenant_id=user.tenant_id, ticket_type=ttype, subject=subject, description=payload.description,
             requester=requester, created_by=actor, impact=payload.impact, urgency=payload.urgency,
             custom_fields=custom_fields, tags=payload.tags,
             is_major_incident=payload.is_major_incident if actor.role in PRIVILEGED_ROLES else False,  # leads decide
@@ -379,6 +407,7 @@ async def update_ticket(payload: TicketUpdateRequest, request: Request, id: int 
             update_data = {k: v for k, v in update_data.items() if k in services.CUSTOMER_EDITABLE}
             if "custom_fields" in update_data:
                 update_data["custom_fields"] = _customer_editable_fields(s, update_data["custom_fields"], ticket.ticket_type_id)
+        _clean_text_fields(update_data)
         services.update_ticket(s, ticket, actor, update_data, request=request)
 
     await run_in_tenant(user, _update)
@@ -461,6 +490,7 @@ async def add_interaction(request: Request, id: int = Path(..., ge=1),
                 store_attachment(s, ticket, f.filename, f.content, f.content_type, it, actor)
             except AttachmentRejected as exc:
                 errors.append(f"{f.filename}: {exc}")
+        _refuse_reply_with_nothing_in_it(cleaned_body, files, errors)
         return it.id, errors
 
     it_id, errors = await run_in_tenant(user, _add)

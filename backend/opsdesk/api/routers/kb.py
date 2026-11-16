@@ -10,7 +10,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy import String
 
 from ...ai.engine import generate_article_draft
-from ...db.models import KnowledgeArticle, Ticket, User
+from ...db.models import Account, Category, KnowledgeArticle, Ticket, User
 from ...db.session import tenant_session
 from ...services import commit_hooks
 from ..schemas.kb import (ArticleCreateRequest, ArticleFromTicketRequest, ArticleResponse, ArticleUpdateRequest,
@@ -59,6 +59,49 @@ def _nf() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
 
 
+def _bad(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+# The values the article form offers (src/pages/articleHelpers.js) and the widths of the columns.
+VISIBILITIES = ("public", "internal")
+STATUSES = ("draft", "published", "retired")
+TITLE_MAX = 300
+TAG_MAX = 50
+_REFERENCES = {"category": Category, "account": Account}
+
+
+def _clean_tags(tags) -> list:
+    clean = list(dict.fromkeys(t.strip() for t in (tags or []) if t and t.strip()))
+    if any(len(t) > TAG_MAX for t in clean):
+        raise _bad(f"A tag can be at most {TAG_MAX} characters.")
+    return clean
+
+
+def _clean_article(s, data: dict, tenant_id: int) -> dict:
+    """Check and tidy the fields an article request carries (only those present), so a bad value is a 400 with a
+    message instead of a database error, and a category or account can only be one of the caller's own tenant."""
+    out = dict(data)
+    if "title" in out:
+        out["title"] = (out["title"] or "").strip()
+        if not out["title"]:
+            raise _bad("Give the article a title.")
+        if len(out["title"]) > TITLE_MAX:
+            raise _bad(f"The title can be at most {TITLE_MAX} characters.")
+    if "body" in out and not (out["body"] or "").strip():
+        raise _bad("Write the article text.")
+    for field, allowed in (("visibility", VISIBILITIES), ("status", STATUSES)):
+        if field in out and out[field] not in allowed:
+            raise _bad(f"Invalid {field}.")
+    if "tags" in out:
+        out["tags"] = _clean_tags(out["tags"])
+    for field, model in _REFERENCES.items():
+        pk = out.get(field)
+        if pk is not None and s.scalars(select(model.id).where(model.id == pk, model.tenant_id == tenant_id)).first() is None:
+            raise _bad(f"Invalid {field}.")
+    return out
+
+
 @router.get("/articles/", response_model=List[ArticleResponse])
 def list_articles(q: Optional[str] = Query(None, description="Search query"),
                   user: AuthenticatedUser = Depends(get_authenticated_user)):
@@ -86,9 +129,10 @@ def create_article(payload: ArticleCreateRequest, user: AuthenticatedUser = Depe
         raise _forbidden("Only agents can edit articles.")
     with tenant_session(user.tenant_id) as s:
         me = _caller(s, user)
-        a = KnowledgeArticle(tenant_id=user.tenant_id, title=payload.title, body=payload.body,
-                             category_id=payload.category, account_id=payload.account, visibility=payload.visibility,
-                             status=payload.status, tags=list(payload.tags or []), author_id=me.id if me else None)
+        v = _clean_article(s, payload.model_dump(), user.tenant_id)
+        a = KnowledgeArticle(tenant_id=user.tenant_id, title=v["title"], body=v["body"],
+                             category_id=v["category"], account_id=v["account"], visibility=v["visibility"],
+                             status=v["status"], tags=v["tags"], author_id=me.id if me else None)
         s.add(a)
         s.flush()
         s.refresh(a)
@@ -123,7 +167,7 @@ def update_article(payload: ArticleUpdateRequest, id: int = Path(..., ge=1),
             KnowledgeArticle.id == id, KnowledgeArticle.tenant_id == user.tenant_id)).first()
         if not a:
             raise _nf()
-        for k, v in payload.model_dump(exclude_unset=True).items():
+        for k, v in _clean_article(s, payload.model_dump(exclude_unset=True), user.tenant_id).items():
             if k == "category":
                 k = "category_id"
             elif k == "account":

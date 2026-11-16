@@ -9,8 +9,11 @@ import {
 
 const src = (f) => readFileSync(new URL(f, import.meta.url), "utf8");
 
-test("a stored summary is shown without a note; a fresh one says where it came from", () => {
+test("a stored summary keeps where it came from; one stored before that was recorded has no origin", () => {
   assert.deepEqual(storedSummary({ ai: { summary: "Disk full on build server." } }), { text: "Disk full on build server.", method: "" });
+  const stored = storedSummary({ ai: { summary: "Problem: disk full", summary_method: "template" } });
+  assert.deepEqual(stored, { text: "Problem: disk full", method: "template" });
+  assert.equal(summaryNote(stored), TEMPLATE_SUMMARY_NOTE, "the note is still shown after the ticket is reopened");
   assert.deepEqual(storedSummary({}), { text: "", method: "" });
   assert.deepEqual(summaryFrom({ summary: "Problem: disk full", method: "template" }), { text: "Problem: disk full", method: "template" });
   assert.deepEqual(summaryFrom({ summary: "Disk is full." }), { text: "Disk is full.", method: "" }, "an older server sends no method");

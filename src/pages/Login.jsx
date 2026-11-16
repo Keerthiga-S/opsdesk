@@ -62,7 +62,7 @@ export default function Login() {
           )}
           {info && <output className="notice">{info}</output>}
           {error && <div className="error" role="alert">{error}</div>}
-          <button className="btn primary" disabled={busy}>{busy ? "Signing in..." : "Sign in"}</button>
+          <button type="submit" className="btn primary" disabled={busy}>{busy ? "Signing in..." : "Sign in"}</button>
           {needOtp && <button type="button" className="btn ghost" onClick={resend} disabled={busy}>Send a new code</button>}
         </form>
       </main>

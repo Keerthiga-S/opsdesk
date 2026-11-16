@@ -276,7 +276,7 @@ function FieldInput({ name, spec, value, onChange, error, options, disabled, ada
   } else if (spec.kind === "str_list" || spec.kind === "domain_list") {
     control = <textarea id={id} className="input" rows={3} value={value ?? ""} onChange={(e) => onChange(e.target.value)} disabled={disabled} placeholder="One per line" />;
   } else {
-    const type = spec.kind === "int" ? "number" : spec.kind === "email" ? "email" : spec.kind === "color" ? "text" : "text";
+    const type = { int: "number", email: "email" }[spec.kind] || "text";
     control = <input id={id} className="input" type={type} value={value ?? ""} onChange={(e) => onChange(e.target.value)} disabled={disabled}
       maxLength={spec.max_len} min={spec.min} max={spec.max} placeholder={spec.kind === "color" ? "#1a2b3c" : undefined} />;
   }

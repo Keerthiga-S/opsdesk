@@ -45,7 +45,7 @@ function ArticleForm({ article, onSaved, onCancel }) {
       </label>
       {formError && <div className="error" role="alert">{formError}</div>}
       <div className="row">
-        <button className="btn primary" disabled={busy}>{articleSaveLabel({ busy, editing: Boolean(article) })}</button>
+        <button type="submit" className="btn primary" disabled={busy}>{articleSaveLabel({ busy, editing: Boolean(article) })}</button>
         <button type="button" className="btn ghost" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>
     </form>

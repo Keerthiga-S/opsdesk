@@ -806,7 +806,7 @@ function TicketEditor({ t, onCancel, onSave }) {
       </label>
       {state.error && <div className="error" role="alert">{state.error}</div>}
       <div className="row">
-        <button className="btn primary sm" disabled={state.busy}>{state.busy ? "Saving..." : "Save"}</button>
+        <button type="submit" className="btn primary sm" disabled={state.busy}>{state.busy ? "Saving..." : "Save"}</button>
         <button type="button" className="btn ghost sm" onClick={onCancel} disabled={state.busy}>Cancel</button>
       </div>
     </form>

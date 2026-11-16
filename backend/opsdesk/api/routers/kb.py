@@ -71,6 +71,21 @@ TAG_MAX = 50
 _REFERENCES = {"category": Category, "account": Account}
 
 
+def _clean_title(value) -> str:
+    title = (value or "").strip()
+    if not title:
+        raise _bad("Give the article a title.")
+    if len(title) > TITLE_MAX:
+        raise _bad(f"The title can be at most {TITLE_MAX} characters.")
+    return title
+
+
+def _clean_body(value) -> str:
+    if not (value or "").strip():
+        raise _bad("Write the article text.")
+    return value
+
+
 def _clean_tags(tags) -> list:
     clean = list(dict.fromkeys(t.strip() for t in (tags or []) if t and t.strip()))
     if any(len(t) > TAG_MAX for t in clean):
@@ -78,27 +93,31 @@ def _clean_tags(tags) -> list:
     return clean
 
 
+def _one_of(field: str, allowed: tuple):
+    def check(value):
+        if value not in allowed:
+            raise _bad(f"Invalid {field}.")
+        return value
+    return check
+
+
+# How each field is checked and tidied; fields not listed here are passed on unchanged.
+_CLEANERS = {"title": _clean_title, "body": _clean_body, "tags": _clean_tags,
+             "visibility": _one_of("visibility", VISIBILITIES), "status": _one_of("status", STATUSES)}
+
+
+def _require_own_tenant(s, model, field: str, pk, tenant_id: int) -> None:
+    """A category or account id must belong to the caller's tenant (None clears the field)."""
+    if pk is not None and s.scalars(select(model.id).where(model.id == pk, model.tenant_id == tenant_id)).first() is None:
+        raise _bad(f"Invalid {field}.")
+
+
 def _clean_article(s, data: dict, tenant_id: int) -> dict:
     """Check and tidy the fields an article request carries (only those present), so a bad value is a 400 with a
     message instead of a database error, and a category or account can only be one of the caller's own tenant."""
-    out = dict(data)
-    if "title" in out:
-        out["title"] = (out["title"] or "").strip()
-        if not out["title"]:
-            raise _bad("Give the article a title.")
-        if len(out["title"]) > TITLE_MAX:
-            raise _bad(f"The title can be at most {TITLE_MAX} characters.")
-    if "body" in out and not (out["body"] or "").strip():
-        raise _bad("Write the article text.")
-    for field, allowed in (("visibility", VISIBILITIES), ("status", STATUSES)):
-        if field in out and out[field] not in allowed:
-            raise _bad(f"Invalid {field}.")
-    if "tags" in out:
-        out["tags"] = _clean_tags(out["tags"])
+    out = {key: _CLEANERS[key](value) if key in _CLEANERS else value for key, value in data.items()}
     for field, model in _REFERENCES.items():
-        pk = out.get(field)
-        if pk is not None and s.scalars(select(model.id).where(model.id == pk, model.tenant_id == tenant_id)).first() is None:
-            raise _bad(f"Invalid {field}.")
+        _require_own_tenant(s, model, field, out.get(field), tenant_id)
     return out
 
 

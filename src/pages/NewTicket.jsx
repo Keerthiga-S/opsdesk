@@ -153,7 +153,7 @@ export default function NewTicket() {
           {otherErrors(errors, type).map(([k, v]) => (
             <div key={k} className="error">{v}</div>
           ))}
-          <div className="row"><button className="btn primary" disabled={busy || fileErrors.length > 0}>{submitLabel({ busy, isAgent: user.is_agent })}</button>
+          <div className="row"><button type="submit" className="btn primary" disabled={busy || fileErrors.length > 0}>{submitLabel({ busy, isAgent: user.is_agent })}</button>
             <button type="button" className="btn ghost" onClick={() => history.back()}>Cancel</button></div>
         </form>
 

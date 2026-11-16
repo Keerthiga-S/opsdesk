@@ -125,6 +125,6 @@ def complete(system, prompt, max_tokens=800):
 
 def complete_json(system, prompt, max_tokens=600):
     raw = complete(system + "\nRespond with a single JSON object only, no prose, no code fences.", prompt, max_tokens)
-    raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
+    raw = re.sub(r"(?:^```(?:json)?)|(?:```$)", "", raw.strip(), flags=re.M).strip()
     start, end = raw.find("{"), raw.rfind("}")
     return json.loads(raw[start:end + 1])

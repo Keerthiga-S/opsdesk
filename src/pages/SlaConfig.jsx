@@ -312,8 +312,8 @@ function HoursDetail({ id }) {
   if (form.is_24x7 !== b.is_24x7) body.is_24x7 = form.is_24x7;
   const schedule = toSchedule(form.rows);
   if (JSON.stringify(schedule) !== JSON.stringify(toSchedule(scheduleRows(b.schedule)))) body.schedule = schedule;
-  const holidays = [...new Set(form.holidays)].sort();
-  if (JSON.stringify(holidays) !== JSON.stringify([...b.holidays].sort())) body.holidays = holidays;
+  const holidays = [...new Set(form.holidays)].sort((a, b) => a.localeCompare(b)); // ISO dates
+  if (JSON.stringify(holidays) !== JSON.stringify([...b.holidays].sort((a, b) => a.localeCompare(b)))) body.holidays = holidays;
   const dirty = Object.keys(body).length > 0;
 
   const setRange = (day, i, k) => (e) => setForm((f) => ({ ...f, rows: f.rows.map((r) => (r.day !== day ? r : { ...r, ranges: r.ranges.map((x, j) => (j === i ? { ...x, [k]: e.target.value } : x)) })) }));

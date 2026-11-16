@@ -77,6 +77,7 @@ export default function AdminDashboard() {
           <div className="card-h"><h2>Sign-in and security</h2></div>
           <div className="card-b">
             <table className="data">
+              <thead className="sr-only"><tr><th>Setting</th><th>Value</th></tr></thead>
               <tbody>
                 <tr><td>Two-step sign-in on</td><td className="num">{users.two_step_enabled} of {users.active} ({pct(users.two_step_enabled, users.active)})</td></tr>
                 <tr><td>Deactivated accounts</td><td className="num">{users.deactivated}</td></tr>

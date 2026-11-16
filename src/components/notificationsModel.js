@@ -58,7 +58,7 @@ export function parseStreamChunk(buffer) {
   for (const raw of lines) {
     const line = raw.trim();
     if (line.startsWith("id:")) {
-      const id = parseInt(line.slice(3).trim(), 10);
+      const id = Number.parseInt(line.slice(3).trim(), 10);
       if (!Number.isNaN(id)) lastEventId = id;
     } else if (line.startsWith("event:")) {
       events.push(line.slice(6).trim());

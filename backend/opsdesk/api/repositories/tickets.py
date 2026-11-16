@@ -403,7 +403,7 @@ class TicketRepository:
                     t.closed_at, t.response_breached, t.resolution_breached,
                     t.response_due_at, t.resolution_due_at, t.first_responded_at,
                     t.is_major_incident, t.tags, t.created_at, t.updated_at, t.resolved_at,
-                    t.ai_summary, t.ai_triage, t.ticket_type_id,
+                    t.ai_summary, t.ai_summary_method, t.ai_triage, t.ticket_type_id,
                     tt.key AS type_key, tt.name AS type_name,
                     s.id AS state_id, s.key AS state_key, s.name AS state_name,
                     s.category AS state_category, s.color AS state_color, s.workflow_id,
@@ -623,6 +623,7 @@ class TicketRepository:
             if user.is_agent and (r["ai_summary"] or r["ai_triage"]):  # staff-only, as in the reference
                 ai_data = {
                     "summary": r["ai_summary"],
+                    "summary_method": r["ai_summary_method"] or "",
                     "triage": r["ai_triage"],
                 }
 

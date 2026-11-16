@@ -4,7 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
 # `apt-get upgrade` picks up Debian security fixes published after the base image was built (e.g. zlib1g).
-# hadolint ignore=DL3005
+# Package versions are left unpinned for the same reason: a pinned version would hold back those fixes.
+# hadolint ignore=DL3005,DL3008
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends libpq5 curl \

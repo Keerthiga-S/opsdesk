@@ -6,8 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy import or_, select
 
-from ...ai.engine import (detect_duplicates, draft_reply, similar_articles, similar_tickets, summarize_with_method,ticket_text,
-                          triage)
+from ...ai.engine import (detect_duplicates, draft_reply, similar_articles, similar_tickets, summarize_with_method,
+                          ticket_text, triage)
 from ...db.models import AIFeedback, Category, KnowledgeArticle, Team, Ticket, User
 from ...db.session import tenant_session
 from ...services import tickets as services
@@ -20,6 +20,8 @@ from ..security import AuthenticatedUser, get_authenticated_user, get_current_us
 from ..tenant_context import tenant_transaction
 
 router = APIRouter(tags=["ai"])
+
+FEEDBACK_FEATURES = ("triage", "similar", "kb", "summary", "draft", "duplicate")  # see AIFeedback.feature
 
 
 def _nf() -> HTTPException:
@@ -67,7 +69,11 @@ def deflection_search(payload: DeflectionSearchRequest, user: AuthenticatedUser 
 @router.post("/api/ai/feedback/", status_code=status.HTTP_201_CREATED)
 def submit_ai_feedback(payload: FeedbackRequest, user: AuthenticatedUser = Depends(get_current_user)):
     """Record user feedback on AI features."""
+    if payload.feature not in FEEDBACK_FEATURES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown AI feature.")
     with tenant_session(user.tenant_id) as s:
+        if payload.ticket_id is not None:
+            _ticket(s, payload.ticket_id, user.tenant_id)  # 404 for a ticket that is not in the caller's tenant
         me = _caller(s, user)
         s.add(AIFeedback(tenant_id=user.tenant_id, ticket_id=payload.ticket_id, feature=payload.feature,
                          suggestion=payload.suggestion, accepted=payload.accepted, user_id=me.id if me else None))
@@ -118,6 +124,7 @@ def ticket_ai_summary(id: int = Path(..., ge=1), user: AuthenticatedUser = Depen
         ticket = _ticket(s, id, user.tenant_id)
         text, method = summarize_with_method(s, ticket)
         ticket.ai_summary = text
+        ticket.ai_summary_method = method
         return {"summary": text, "method": method}
 
 

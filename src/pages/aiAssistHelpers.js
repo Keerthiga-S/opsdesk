@@ -9,7 +9,7 @@ export const TEMPLATE_DRAFT_NOTE = "Template draft: no AI model is configured, s
 
 // ---- summary: its text and where it came from ("ai", "template", or "" when it was stored earlier and is not known)
 
-export const storedSummary = (ticket) => ({ text: ticket.ai?.summary || "", method: "" });
+export const storedSummary = (ticket) => ({ text: ticket.ai?.summary || "", method: ticket.ai?.summary_method || "" });
 
 export const summaryFrom = (response) => ({ text: response.summary, method: response.method || "" });
 

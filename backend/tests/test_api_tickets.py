@@ -534,3 +534,37 @@ class TestBulkAssign:
         assert bad.status_code == 207 and "not a member of team" in bad.json()["results"][str(t["id"])]["error"]
         ok = api.post("/api/tickets/bulk/", headers=h, json={"action": "assign", "ticket_ids": [t["id"]], "assignee_id": world.users["team_lead"], "team_id": team_id})
         assert ok.status_code == 200 and ok.json()["succeeded"] == 1
+
+
+class TestTextValidation:
+    """The API refuses what the form refuses, with a message, instead of storing it or failing with a server error."""
+
+    @pytest.mark.parametrize("role", ["customer", "manager"])
+    @pytest.mark.parametrize("subject", ["", "   ", None, "x" * 301])
+    def test_a_bad_subject_is_refused_and_the_ticket_is_unchanged(self, api, auth, role, subject):
+        t = create_ticket_api(api, auth("customer"), "Keep me")
+        r = api.patch(f"/api/tickets/{t['id']}/", headers=auth(role), json={"subject": subject})
+        assert r.status_code == 400 and r.json()["detail"]
+        assert api.get(f"/api/tickets/{t['id']}/", headers=auth("manager")).json()["subject"] == "Keep me"
+
+    def test_a_subject_is_trimmed_and_a_null_description_clears_it(self, api, auth):
+        h = auth("customer")
+        t = create_ticket_api(api, h, "Original", description="Some details")
+        r = api.patch(f"/api/tickets/{t['id']}/", headers=h, json={"subject": "  padded  ", "description": None})
+        assert r.status_code == 200 and r.json()["subject"] == "padded" and r.json()["description"] == ""
+
+    @pytest.mark.parametrize("subject", ["", "   ", "y" * 301])
+    def test_creating_with_a_bad_subject_is_refused(self, api, auth, subject):
+        h = auth("customer")
+        r = api.post("/api/tickets/", headers=h, json={"ticket_type": ticket_type_id(api, h), "subject": subject})
+        assert r.status_code == 400 and r.json()["detail"]
+
+    def test_a_reply_with_only_refused_files_is_not_posted(self, api, auth):
+        h = auth("employee")
+        t = create_ticket_api(api, h, "Reply rules")
+        url = f"/api/tickets/{t['id']}/interactions/"
+        refused = api.post(url, headers=h, data={"body": "", "kind": "public"}, files=[("files", ("run.exe", b"MZ", "application/octet-stream"))])
+        assert refused.status_code == 400 and "run.exe: Files of type .exe are not allowed" in refused.json()["detail"]
+        assert api.get(url, headers=h).json() == []  # nothing was stored
+        mixed = api.post(url, headers=h, data={"body": "See notes", "kind": "public"}, files=[("files", ("run.exe", b"MZ", "application/octet-stream"))])
+        assert mixed.status_code == 201 and mixed.json()["attachment_errors"]  # text plus a refused file is still sent

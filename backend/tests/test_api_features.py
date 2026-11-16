@@ -579,3 +579,53 @@ class TestSavedQueues:
     def test_other_users_personal_queues_are_invisible(self, api, world, auth):
         q = api.post("/api/saved-queues/", headers=auth("employee"), json={"name": "Private", "params": {}}).json()
         assert api.get(f"/api/saved-queues/{q['id']}/", headers=auth("team_lead")).status_code == 404
+
+
+class TestInputValidation:
+    """Bad knowledge-base and AI-feedback input is a 400/404 with a message, never a server error or another tenant's data."""
+
+    ARTICLE = {"title": "Reset VPN", "body": "Click reset", "visibility": "public", "status": "published", "tags": ["vpn"]}
+
+    @pytest.mark.parametrize("change", [
+        {"title": "  "}, {"title": "t" * 301}, {"body": ""}, {"status": "bogus"}, {"visibility": "everyone"}, {"tags": ["g" * 51]},
+        {"category": 10 ** 9}, {"account": 10 ** 9},
+    ])
+    def test_a_bad_article_is_refused_on_create_and_on_edit(self, api, auth, change):
+        h = auth("employee")
+        assert api.post("/api/kb/articles/", headers=h, json={**self.ARTICLE, **change}).status_code == 400
+        made = api.post("/api/kb/articles/", headers=h, json=self.ARTICLE).json()
+        r = api.patch(f"/api/kb/articles/{made['id']}/", headers=h, json=change)
+        assert r.status_code == 400 and r.json()["detail"]
+        assert api.get(f"/api/kb/articles/{made['id']}/", headers=h).json()["title"] == "Reset VPN"
+
+    def test_a_null_title_is_refused_and_tags_are_tidied(self, api, auth):
+        h = auth("employee")
+        made = api.post("/api/kb/articles/", headers=h, json={**self.ARTICLE, "tags": [" vpn ", "vpn", "", "net"]}).json()
+        assert made["tags"] == ["vpn", "net"]
+        assert api.patch(f"/api/kb/articles/{made['id']}/", headers=h, json={"title": None}).status_code == 400
+
+    def test_a_category_or_account_of_another_tenant_is_refused(self, api, world, other_world, auth):
+        theirs = api.get("/api/meta/", headers=auth("manager", other_world)).json()
+        for field, pk in (("category", theirs["categories"][0]["id"]), ("account", theirs["accounts"][0]["id"])):
+            r = api.post("/api/kb/articles/", headers=auth("employee"), json={**self.ARTICLE, field: pk})
+            assert r.status_code == 400, field
+        mine = api.get("/api/meta/", headers=auth("employee")).json()["categories"][0]["id"]
+        assert api.post("/api/kb/articles/", headers=auth("employee"), json={**self.ARTICLE, "category": mine}).json()["category"] == mine
+
+    def test_feedback_needs_a_known_feature_and_a_ticket_of_the_callers_tenant(self, api, world, other_world, auth):
+        h = auth("employee")
+        mine = create_ticket_api(api, h, "Mine")
+        theirs = create_ticket_api(api, auth("employee", other_world), "Theirs")
+        post = lambda **kw: api.post("/api/ai/feedback/", headers=h, json={"feature": "draft", "accepted": True, **kw})  # noqa: E731
+        assert post(ticket_id=mine["id"]).status_code == 201
+        assert post().status_code == 201  # feedback not tied to a ticket
+        assert post(ticket_id=10 ** 9).status_code == 404
+        assert post(ticket_id=theirs["id"]).status_code == 404
+        assert post(ticket_id=mine["id"], feature="f" * 30).status_code == 400
+
+    def test_the_summary_remembers_where_it_came_from(self, api, auth):
+        h = auth("employee")
+        t = create_ticket_api(api, h, "Summarise me")
+        assert api.get(f"/api/tickets/{t['id']}/", headers=h).json()["ai"]["summary_method"] == ""  # none stored yet
+        assert api.post(f"/api/tickets/{t['id']}/ai_summary/", headers=h).json()["method"] == "template"
+        assert api.get(f"/api/tickets/{t['id']}/", headers=h).json()["ai"]["summary_method"] == "template"

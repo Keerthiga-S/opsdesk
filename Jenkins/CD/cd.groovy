@@ -12,10 +12,22 @@ def deploy() {
             file(
                 credentialsId: 'cosign-public-key',
                 variable: 'COSIGN_PUB_KEY'
+            ),
+            usernamePassword(
+                credentialsId: 'dockerhub-creds',
+                usernameVariable: 'DOCKERHUB_USER',
+                passwordVariable: 'DOCKERHUB_PASSWORD'
             )
         ]) {
             sh '''
                 set -eu
+
+                # The registry is private; Cosign needs the same Docker config as Docker CLI.
+                set +x
+                mkdir -p "${DOCKER_CONFIG}"
+                printf '%s' "${DOCKERHUB_PASSWORD}" | docker login \
+                    --username "${DOCKERHUB_USER}" --password-stdin
+                set -x
 
                 echo "Verifying backend image signature..."
 
@@ -62,6 +74,17 @@ def deploy() {
 
                 ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
 
+                # Docker CLI uses Jenkins's registry login when pulling through
+                # the production host's Docker daemon over SSH.
+                IMAGES=$(ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                    "cd '${DEPLOY_DIR}' && IMAGE_TAG='${IMAGE_TAG}' docker compose config --images")
+                test -n "$IMAGES"
+
+                for image in $IMAGES; do
+                    echo "Pulling $image on the production Docker daemon..."
+                    docker -H "ssh://${DEPLOY_USER}@${DEPLOY_HOST}" pull "$image"
+                done
+
                 ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
                     "export IMAGE_TAG='${IMAGE_TAG}' DEPLOY_DIR='${DEPLOY_DIR}'; bash -s" <<'REMOTE'
 
@@ -73,13 +96,9 @@ def deploy() {
 
                 docker compose config --quiet
 
-                echo "Pulling versioned Docker images..."
-
-                docker compose pull
-
                 echo "Deploying OpsDesk containers..."
 
-                docker compose up -d --remove-orphans
+                docker compose up -d --pull never --no-build --remove-orphans
 
                 echo "Deployment commands completed."
 

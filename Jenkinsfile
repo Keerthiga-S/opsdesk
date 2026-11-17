@@ -35,38 +35,24 @@ pipeline {
                         cleanWs()
                         checkout scm
                         script {
-                            // Build and deploy this exact revision, without a manual tag parameter.
-                            env.IMAGE_TAG = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                            // The PR test merge and final merge share a tree ID when their files match.
+                            env.IMAGE_TAG = sh(script: 'git rev-parse HEAD^{tree}', returnStdout: true).trim()
                             def runId = env.BUILD_TAG.replaceAll('[^a-zA-Z0-9_.-]', '-')
                             env.CI_NETWORK = "opsdesk-ci-${runId}"
                             env.POSTGRES_CONTAINER = "opsdesk-ci-postgres-${runId}"
                             env.REDIS_CONTAINER = "opsdesk-ci-redis-${runId}"
                             env.DOCKER_CONFIG = "${pwd(tmp: true)}/docker-config"
-                            echo "Branch: ${env.BRANCH_NAME}; PR: ${env.CHANGE_ID ?: 'none'}; image tag: ${env.IMAGE_TAG}"
+                            echo "Branch: ${env.BRANCH_NAME}; PR: ${env.CHANGE_ID ?: 'none'}; source tree tag: ${env.IMAGE_TAG}"
                         }
                     }
                 }
 
                 stage('CI - Validation') {
+                    when { changeRequest target: 'Prod' }
                     steps {
                         script {
                             def ci = load 'Jenkins/CI/ci.groovy'
                             ci.runValidation()
-                        }
-                    }
-                }
-
-                stage('Publish Production Images') {
-                    when {
-                        allOf {
-                            branch 'Prod'
-                            not { changeRequest() }
-                        }
-                    }
-                    steps {
-                        script {
-                            def ci = load 'Jenkins/CI/ci.groovy'
-                            ci.publishImages()
                         }
                     }
                 }
@@ -112,7 +98,7 @@ pipeline {
             echo 'SUCCESS: all applicable OpsDesk pipeline stages passed.'
         }
         failure {
-            echo 'FAILURE: review the failed stage. Publication and deployment stop on CI failure.'
+            echo 'FAILURE: review the failed stage. Publication and deployment stop on failure.'
         }
     }
 }

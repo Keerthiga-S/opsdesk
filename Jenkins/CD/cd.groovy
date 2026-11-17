@@ -12,10 +12,22 @@ def deploy() {
             file(
                 credentialsId: 'cosign-public-key',
                 variable: 'COSIGN_PUB_KEY'
+            ),
+            usernamePassword(
+                credentialsId: 'dockerhub-creds',
+                usernameVariable: 'DOCKERHUB_USER',
+                passwordVariable: 'DOCKERHUB_PASSWORD'
             )
         ]) {
             sh '''
                 set -eu
+
+                # The registry is private; Cosign needs the same Docker config as Docker CLI.
+                set +x
+                mkdir -p "${DOCKER_CONFIG}"
+                printf '%s' "${DOCKERHUB_PASSWORD}" | docker login \
+                    --username "${DOCKERHUB_USER}" --password-stdin
+                set -x
 
                 echo "Verifying backend image signature..."
 

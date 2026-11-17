@@ -71,6 +71,8 @@ it does not update the server's checkout. Its Compose verification uses the same
 tag as deployment. Jenkins uses `dockerhub-creds` to verify signatures and to
 pull the Compose images through the production Docker daemon over SSH. The
 production host does not need a separate Docker Hub login.
+Deployment verification waits up to three minutes for the database, API,
+worker, beat, and web health checks to become healthy.
 
 References: [Jenkins load step](https://www.jenkins.io/doc/pipeline/steps/workflow-cps/#load-evaluate-a-groovy-source-file-into-the-pipeline-script),
 [GitHub Branch Source](https://plugins.jenkins.io/github-branch-source/), and

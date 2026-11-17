@@ -68,9 +68,9 @@ The new Jenkinsfile and both helper scripts must be committed together.
 The production directory must already contain the correct Compose configuration
 and production environment. The pipeline selects the images using `IMAGE_TAG`;
 it does not update the server's checkout. Its Compose verification uses the same
-tag as deployment. Jenkins uses `dockerhub-creds` to verify signatures in the
-private registry. The production host must separately have Docker Hub pull
-access as `ubuntu` so `docker compose pull` can fetch the application images.
+tag as deployment. Jenkins uses `dockerhub-creds` to verify signatures and to
+pull the Compose images through the production Docker daemon over SSH. The
+production host does not need a separate Docker Hub login.
 
 References: [Jenkins load step](https://www.jenkins.io/doc/pipeline/steps/workflow-cps/#load-evaluate-a-groovy-source-file-into-the-pipeline-script),
 [GitHub Branch Source](https://plugins.jenkins.io/github-branch-source/), and

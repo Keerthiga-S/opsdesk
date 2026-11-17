@@ -17,12 +17,8 @@ pipeline {
 
             steps {
                 echo 'Pull request targeting Prod detected.'
-                echo 'Running CI pipeline.'
-
-                script {
-                    def ciPipeline = load 'Jenkins/CI/Jenkinsfile'
-                    ciPipeline.runCI()
-                }
+                echo 'CI will run for this pull request.'
+                echo 'The CI pipeline must be implemented directly here or through reusable pipeline functions.'
             }
         }
 
@@ -33,12 +29,8 @@ pipeline {
 
             steps {
                 echo 'Prod branch detected.'
-                echo 'Running CD pipeline.'
-
-                script {
-                    def cdPipeline = load 'Jenkins/CD/Jenkinsfile'
-                    cdPipeline.runCD()
-                }
+                echo 'CD will run after changes are merged into Prod.'
+                echo 'The CD pipeline must be implemented directly here or through reusable pipeline functions.'
             }
         }
     }

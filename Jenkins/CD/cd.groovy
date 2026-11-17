@@ -20,6 +20,7 @@ def deploy() {
                 echo "Verifying backend image signature..."
 
                 docker run --rm \
+                    --user "$(id -u):$(id -g)" \
                     --volumes-from "${JENKINS_CONTAINER}" \
                     -e DOCKER_CONFIG="${DOCKER_CONFIG}" \
                     gcr.io/projectsigstore/cosign:v2.4.1 \
@@ -30,6 +31,7 @@ def deploy() {
                 echo "Verifying frontend image signature..."
 
                 docker run --rm \
+                    --user "$(id -u):$(id -g)" \
                     --volumes-from "${JENKINS_CONTAINER}" \
                     -e DOCKER_CONFIG="${DOCKER_CONFIG}" \
                     gcr.io/projectsigstore/cosign:v2.4.1 \

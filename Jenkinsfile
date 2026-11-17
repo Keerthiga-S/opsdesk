@@ -9,17 +9,41 @@ pipeline {
     }
 
     stages {
+        stage('Checkout Pipeline Source') {
+            when {
+                anyOf {
+                    changeRequest target: 'Prod'
+                    branch 'Prod'
+                }
+            }
+            steps {
+                dir('pipeline-src') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/Prod']],
+                        userRemoteConfigs: [[
+                            url: 'https://github.com/Keerthiga-S/opsdesk.git',
+                            credentialsId: 'github-token'
+                        ]]
+                    ])
+                }
+
+                sh '''
+                    echo "Checking pipeline files from Prod..."
+                    test -f pipeline-src/Jenkins/CI/ci.groovy
+                    test -f pipeline-src/Jenkins/CD/cd.groovy
+                    echo "Both pipeline files found."
+                '''
+            }
+        }
+
         stage('CI - Pull Request Validation') {
             when {
                 changeRequest target: 'Prod'
             }
             steps {
-                script {
-                    echo "Running CI for PR #${env.CHANGE_ID}"
-
-                    def ci = load 'Jenkins/CI/ci.groovy'
-                    ci.runCI()
-                }
+                echo "PR #${env.CHANGE_ID}: Pipeline source is available."
+                error('CI scripts must be converted to reusable Groovy scripts before execution.')
             }
         }
 
@@ -28,26 +52,18 @@ pipeline {
                 branch 'Prod'
             }
             steps {
-                script {
-                    echo 'Running production deployment.'
-
-                    def cd = load 'Jenkins/CD/cd.groovy'
-                    cd.runCD()
-                }
+                echo 'Production pipeline source is available.'
+                error('CD scripts must be converted to reusable Groovy scripts before execution.')
             }
         }
     }
 
     post {
         success {
-            echo 'OpsDesk pipeline completed successfully.'
+            echo 'Pipeline completed.'
         }
         failure {
-            echo 'OpsDesk pipeline failed.'
-        }
-        always {
-            echo "Branch: ${env.BRANCH_NAME}"
-            echo "PR: ${env.CHANGE_ID ?: 'No'}"
+            echo 'Pipeline requires correction. Check the failed stage.'
         }
     }
 }

@@ -1,10 +1,10 @@
-// Reusable deployment steps. IMAGE_TAG comes from the source revision built by CI.
+// Reusable deployment steps. IMAGE_TAG identifies the source tree built by PR CI.
 def deploy() {
     if (env.CHANGE_ID || env.BRANCH_NAME != 'Prod') {
         error('Production deployment is allowed only on the Prod branch after merge.')
     }
     if (!(env.IMAGE_TAG ==~ /^[a-f0-9]{40}$/)) {
-        error('CD requires the commit SHA image tag produced by this build.')
+        error('CD requires the source tree image tag produced by PR CI.')
     }
 
     stage('Verify Image Signatures') {

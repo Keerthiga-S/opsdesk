@@ -1,8 +1,10 @@
 // Reusable Scripted Pipeline steps. The root Jenkinsfile owns the pipeline and agent.
 def runValidation() {
-    if (!(env.BRANCH_NAME == 'Prod' && !env.CHANGE_ID) &&
-        !(env.CHANGE_ID && env.CHANGE_TARGET == 'Prod')) {
-        error('CI is allowed only for Prod or a pull request targeting Prod.')
+    if (!(env.CHANGE_ID && env.CHANGE_TARGET == 'Prod')) {
+        error('CI validation is allowed only for a pull request targeting Prod.')
+    }
+    if (env.CHANGE_FORK) {
+        error('This credentialed CI job does not publish images from fork pull requests.')
     }
 
     stage('Unit Testing & Coverage') {
@@ -220,6 +222,15 @@ def runValidation() {
         '''
     }
 
+    buildAndScanImages()
+    publishImages()
+}
+
+def buildAndScanImages() {
+    if (!(env.CHANGE_ID && env.CHANGE_TARGET == 'Prod')) {
+        error('Image build and scan are allowed only for a pull request targeting Prod.')
+    }
+
     stage('Build Docker Image') {
         sh '''
             set -e
@@ -303,11 +314,14 @@ def runValidation() {
 }
 
 def publishImages() {
-    if (env.CHANGE_ID || env.BRANCH_NAME != 'Prod') {
-        error('Image publication is allowed only on the Prod branch after merge.')
+    if (!(env.CHANGE_ID && env.CHANGE_TARGET == 'Prod')) {
+        error('Image publication is allowed only for a pull request targeting Prod.')
+    }
+    if (env.CHANGE_FORK) {
+        error('Image publication from fork pull requests is not allowed.')
     }
 
-    stage('Promote & Push to Registry') {
+    stage('Push Validated Images to Registry') {
         withCredentials([
             usernamePassword(
                 credentialsId: 'dockerhub-creds',
@@ -324,22 +338,9 @@ def publishImages() {
                     --username "${DOCKERHUB_USER}" \
                     --password-stdin
 
-                # Add application-specific build tags and latest tags.
-                docker tag \
-                    "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}" \
-                    "${DOCKERHUB_IMAGE}:backend-latest"
-
-                docker tag \
-                    "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}" \
-                    "${DOCKERHUB_IMAGE}:frontend-latest"
-
-                # Push backend build and latest tags
+                # Publish only source-tree tags; a PR must not change latest.
                 docker push "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
-                docker push "${DOCKERHUB_IMAGE}:backend-latest"
-
-                # Push frontend build and latest tags
                 docker push "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
-                docker push "${DOCKERHUB_IMAGE}:frontend-latest"
 
                 docker logout
 
@@ -348,7 +349,7 @@ def publishImages() {
         }
     }
 
-    stage('Sign Image') {
+    stage('Sign Validated Images') {
         withCredentials([
             file(
                 credentialsId: 'cosign-private-key',
@@ -407,9 +408,7 @@ def publishImages() {
                 }
 
                 sign_image "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
-                sign_image "${DOCKERHUB_IMAGE}:backend-latest"
                 sign_image "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
-                sign_image "${DOCKERHUB_IMAGE}:frontend-latest"
 
                 echo "All OpsDesk images signed successfully."
             '''

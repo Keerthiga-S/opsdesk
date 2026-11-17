@@ -6,23 +6,32 @@ and `Jenkins/CD/cd.groovy`. It is the only file containing a Declarative
 
 | Event | Execution |
 | --- | --- |
-| PR opened or updated with target `Prod` | Tests, coverage, Dockerfile lint reports, SonarQube quality gate, dependency scan, image build and image scan |
-| Merge into `Prod` | Validate the merged commit, push and sign images, verify signatures, deploy and verify production |
-| Push to `dev` or PR targeting another branch | Delivery stages skipped |
+| PR opened or updated with target `Prod` | Tests, coverage, Dockerfile lint reports, SonarQube quality gate, dependency scan, image build and image scan, then push and sign versioned images |
+| Merge into `Prod` | Verify the matching signed images, pull them from Docker Hub, deploy and verify production |
+| Push to `Dev` or PR targeting another branch | Delivery stages skipped |
 
-Any validation failure stops publication and deployment. Dockerfile linting
-currently produces reports only; SonarQube and Trivy retain their existing gates.
-Images use the checked-out commit SHA as their tag. CD receives that tag
-automatically from the same build. PR builds do not publish or deploy images.
-Production branch builds also run on direct pushes; require PRs in GitHub to
-ensure production changes go through PR validation.
+Any validation failure stops the PR build before image publication. Dockerfile
+linting currently produces reports only; SonarQube and Trivy retain their
+existing gates. PR CI publishes and signs only versioned images; it never
+updates `latest` tags or deploys. The image tag is the checked-out Git tree ID,
+which identifies the source files. A PR test merge and the final `Prod` merge
+can have different commit IDs but the same tree ID when their files match.
+CD computes the merged tree ID, verifies the signatures on those images, and
+deploys them without rebuilding or repeating CI. If the merged tree differs
+from the validated PR tree, CD will fail unless matching signed images already
+exist for the new tree ID.
+Production branch builds also run on direct pushes; require PRs and the passing
+PR Jenkins check in GitHub. Confirm administrators cannot bypass that rule.
+Only trusted PR authors should be able to run this job: PR code has access to
+the registry and signing credentials during publication.
 
 ## Jenkins configuration
 
 1. Use a Multibranch Pipeline with GitHub Branch Source for this repository.
 2. Set the script path to `Jenkinsfile` relative to the repository root.
 3. Enable discovery of origin pull requests. Choose testing the PR merged with
-   the current target branch so validation includes the proposed merge.
+   the current target branch so validation includes the proposed merge. Disable
+   fork pull request discovery for this privileged job.
 4. Enable branch discovery including `Prod` (do not exclude `Prod` with filters).
 5. Configure the repository webhook to `https://<jenkins-host>/github-webhook/`
    with push and pull request events. Verify deliveries succeed.

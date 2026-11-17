@@ -504,6 +504,7 @@ pipeline {
 
 
 
+
         // ---------------------------------------------------------
         // 11. SIGN IMAGE
         // ---------------------------------------------------------
@@ -519,6 +520,11 @@ pipeline {
                     string(
                         credentialsId: 'cosign-passphrase',
                         variable: 'COSIGN_PASSWORD'
+                    ),
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKERHUB_USER',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
                     )
                 ]) {
                     sh '''
@@ -538,8 +544,14 @@ pipeline {
                         JENKINS_UID=$(id -u)
                         JENKINS_GID=$(id -g)
 
-                        echo "Jenkins UID: ${JENKINS_UID}"
-                        echo "Jenkins GID: ${JENKINS_GID}"
+                        # Authenticate Jenkins with Docker Hub.
+                        export DOCKER_CONFIG=/var/jenkins_home/.docker
+                        mkdir -p "$DOCKER_CONFIG"
+
+                        echo "Authenticating with Docker Hub..."
+                        echo "$DOCKERHUB_TOKEN" | docker login \
+                            --username "$DOCKERHUB_USER" \
+                            --password-stdin
 
                         sign_image() {
                             IMAGE="$1"
@@ -578,7 +590,6 @@ pipeline {
             }
         }
 
-    }
 
     // -------------------------------------------------------------
     // GLOBAL POST ACTIONS

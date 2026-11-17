@@ -1,299 +1,204 @@
-
-pipeline {
-    agent any
-
-    options {
-        timeout(time: 30, unit: 'MINUTES')
-        timestamps()
-        disableConcurrentBuilds()
+// Reusable deployment steps. IMAGE_TAG comes from the source revision built by CI.
+def deploy() {
+    if (env.CHANGE_ID || env.BRANCH_NAME != 'Prod') {
+        error('Production deployment is allowed only on the Prod branch after merge.')
+    }
+    if (!(env.IMAGE_TAG ==~ /^[a-f0-9]{40}$/)) {
+        error('CD requires the commit SHA image tag produced by this build.')
     }
 
-    parameters {
-        string(
-            name: 'IMAGE_TAG',
-            defaultValue: '',
-            description: 'Enter the successful CI image tag, for example 21'
-        )
-    }
+    stage('Verify Image Signatures') {
+        withCredentials([
+            file(
+                credentialsId: 'cosign-public-key',
+                variable: 'COSIGN_PUB_KEY'
+            )
+        ]) {
+            sh '''
+                set -eu
 
-    environment {
-        DEPLOY_HOST = '3.7.206.60'
-        DEPLOY_USER = 'ubuntu'
-        DEPLOY_DIR = '/var/www/opsdesk/opsdesk'
-        DOCKERHUB_IMAGE = 'iitmpravartak/opsdesk'
-        JENKINS_CONTAINER = 'jenkins'
-    }
+                echo "Verifying backend image signature..."
 
-    stages {
+                docker run --rm \
+                    --volumes-from "${JENKINS_CONTAINER}" \
+                    -e DOCKER_CONFIG="${DOCKER_CONFIG}" \
+                    gcr.io/projectsigstore/cosign:v2.4.1 \
+                    verify \
+                    --key "${COSIGN_PUB_KEY}" \
+                    "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
 
-        // ==========================================
-        // STAGE 1: VALIDATE PARAMETERS
-        // ==========================================
+                echo "Verifying frontend image signature..."
 
-        stage('Validate Parameters') {
-            steps {
-                script {
-                    if (!params.IMAGE_TAG?.trim()) {
-                        error(
-                            'IMAGE_TAG is required. Enter a successful CI image tag.'
-                        )
-                    }
+                docker run --rm \
+                    --volumes-from "${JENKINS_CONTAINER}" \
+                    -e DOCKER_CONFIG="${DOCKER_CONFIG}" \
+                    gcr.io/projectsigstore/cosign:v2.4.1 \
+                    verify \
+                    --key "${COSIGN_PUB_KEY}" \
+                    "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
 
-                    if (!(params.IMAGE_TAG ==~ /^[A-Za-z0-9_.-]+$/)) {
-                        error('Invalid IMAGE_TAG format.')
-                    }
-
-                    env.IMAGE_TAG = params.IMAGE_TAG.trim()
-
-                    echo "Deploying image tag: ${env.IMAGE_TAG}"
-                }
-            }
+                echo "SUCCESS: Both image signatures verified."
+            '''
         }
+    }
 
-        // ==========================================
-        // STAGE 2: VERIFY COSIGN SIGNATURES
-        // ==========================================
+    stage('Deploy via Docker Compose') {
+        echo "Deploying OpsDesk to ${DEPLOY_HOST}"
 
-        stage('Verify Image Signatures') {
-            steps {
-                withCredentials([
-                    file(
-                        credentialsId: 'cosign-public-key',
-                        variable: 'COSIGN_PUB_KEY'
-                    )
-                ]) {
-                    sh '''
-                        set -eu
+        sshagent(credentials: ['OpsDesk_Deployment_Server']) {
+            sh '''
+                set -eu
 
-                        echo "Verifying backend image signature..."
+                mkdir -p ~/.ssh
+                chmod 700 ~/.ssh
 
-                        docker run --rm \
-                            --volumes-from "${JENKINS_CONTAINER}" \
-                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
-                            gcr.io/projectsigstore/cosign:v2.4.1 \
-                            verify \
-                            --key "${COSIGN_PUB_KEY}" \
-                            "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+                touch ~/.ssh/known_hosts
+                chmod 600 ~/.ssh/known_hosts
 
-                        echo "Verifying frontend image signature..."
+                ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
 
-                        docker run --rm \
-                            --volumes-from "${JENKINS_CONTAINER}" \
-                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
-                            gcr.io/projectsigstore/cosign:v2.4.1 \
-                            verify \
-                            --key "${COSIGN_PUB_KEY}" \
-                            "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+                ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                    "export IMAGE_TAG='${IMAGE_TAG}' DEPLOY_DIR='${DEPLOY_DIR}'; bash -s" <<'REMOTE'
 
-                        echo "SUCCESS: Both image signatures verified."
-                    '''
-                }
-            }
+                set -eu
 
-            post {
-                failure {
-                    echo 'CD stopped: image signature verification failed.'
-                }
-            }
-        }
+                cd "$DEPLOY_DIR"
 
-        // ==========================================
-        // STAGE 3: DEPLOY TO PRODUCTION
-        // ==========================================
+                echo "Checking Docker Compose configuration..."
 
-        stage('Deploy via Docker Compose') {
-            steps {
-                echo "Deploying OpsDesk to ${DEPLOY_HOST}"
+                docker compose config --quiet
 
-                sshagent(credentials: ['OpsDesk_Deployment_Server']) {
-                    sh '''
-                        set -eu
+                echo "Pulling versioned Docker images..."
 
-                        mkdir -p ~/.ssh
-                        chmod 700 ~/.ssh
+                docker compose pull
 
-                        touch ~/.ssh/known_hosts
-                        chmod 600 ~/.ssh/known_hosts
+                echo "Deploying OpsDesk containers..."
 
-                        ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+                docker compose up -d --remove-orphans
 
-                        ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "IMAGE_TAG='${IMAGE_TAG}' DEPLOY_DIR='${DEPLOY_DIR}' bash -s" <<'REMOTE'
-
-                        set -eu
-
-                        cd "$DEPLOY_DIR"
-
-                        echo "Checking Docker Compose configuration..."
-
-                        docker compose config --quiet
-
-                        echo "Pulling versioned Docker images..."
-
-                        docker compose pull
-
-                        echo "Deploying OpsDesk containers..."
-
-                        docker compose up -d --remove-orphans
-
-                        echo "Deployment commands completed."
+                echo "Deployment commands completed."
 
 REMOTE
-                    '''
-                }
-            }
-
-            post {
-                failure {
-                    echo 'Deployment failed. Check SSH, Docker and Docker Compose logs.'
-                }
-            }
+            '''
         }
+    }
 
-        // ==========================================
-        // STAGE 4: VERIFY PRODUCTION DEPLOYMENT
-        // ==========================================
+    stage('Verify Deployment') {
+        sshagent(credentials: ['OpsDesk_Deployment_Server']) {
+            sh '''
+                set -eu
 
-        stage('Verify Deployment') {
-            steps {
-                sshagent(credentials: ['OpsDesk_Deployment_Server']) {
-                    sh '''
-                        set -eu
+                ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                    "export IMAGE_TAG='${IMAGE_TAG}' DEPLOY_DIR='${DEPLOY_DIR}'; bash -s" <<'REMOTE'
 
-                        ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "DEPLOY_DIR='${DEPLOY_DIR}' bash -s" <<'REMOTE'
+                set -eu
 
-                        set -eu
+                cd "$DEPLOY_DIR"
 
-                        cd "$DEPLOY_DIR"
+                echo "========== CONTAINER STATUS =========="
 
-                        echo "========== CONTAINER STATUS =========="
+                docker compose ps --all
 
-                        docker compose ps --all
+                echo "======================================"
 
-                        echo "======================================"
+                # --------------------------------
+                # Verify database migration
+                # --------------------------------
 
-                        # --------------------------------
-                        # Verify database migration
-                        # --------------------------------
+                echo "Checking migration status..."
 
-                        echo "Checking migration status..."
+                MIGRATE_ID=$(docker compose ps -aq migrate)
 
-                        MIGRATE_ID=$(docker compose ps -aq migrate)
+                if [ -z "$MIGRATE_ID" ]; then
+                    echo "ERROR: Migration container not found."
+                    exit 1
+                fi
 
-                        if [ -z "$MIGRATE_ID" ]; then
-                            echo "ERROR: Migration container not found."
-                            exit 1
-                        fi
+                MIGRATE_STATUS=$(docker inspect \
+                    -f '{{.State.Status}}' "$MIGRATE_ID")
 
-                        MIGRATE_STATUS=$(docker inspect \
-                            -f '{{.State.Status}}' "$MIGRATE_ID")
+                MIGRATE_EXIT=$(docker inspect \
+                    -f '{{.State.ExitCode}}' "$MIGRATE_ID")
 
-                        MIGRATE_EXIT=$(docker inspect \
-                            -f '{{.State.ExitCode}}' "$MIGRATE_ID")
+                if [ "$MIGRATE_STATUS" != "exited" ] || \
+                   [ "$MIGRATE_EXIT" != "0" ]; then
 
-                        if [ "$MIGRATE_STATUS" != "exited" ] || \
-                           [ "$MIGRATE_EXIT" != "0" ]; then
+                    echo "ERROR: Migration failed."
 
-                            echo "ERROR: Migration failed."
+                    docker compose logs --tail=50 migrate
 
-                            docker compose logs --tail=50 migrate
+                    exit 1
+                fi
 
-                            exit 1
-                        fi
+                echo "SUCCESS: Database migration completed."
 
-                        echo "SUCCESS: Database migration completed."
+                # --------------------------------
+                # Verify healthy services
+                # --------------------------------
 
-                        # --------------------------------
-                        # Verify healthy services
-                        # --------------------------------
+                echo "Checking application health..."
 
-                        echo "Checking application health..."
+                for svc in db api worker beat; do
 
-                        for svc in db api worker beat; do
+                    CID=$(docker compose ps -q "$svc")
 
-                            CID=$(docker compose ps -q "$svc")
+                    if [ -z "$CID" ]; then
+                        echo "ERROR: $svc container not found."
+                        exit 1
+                    fi
 
-                            if [ -z "$CID" ]; then
-                                echo "ERROR: $svc container not found."
-                                exit 1
-                            fi
+                    HEALTH=$(docker inspect \
+                        -f '{{.State.Health.Status}}' "$CID")
 
-                            HEALTH=$(docker inspect \
-                                -f '{{.State.Health.Status}}' "$CID")
+                    if [ "$HEALTH" != "healthy" ]; then
 
-                            if [ "$HEALTH" != "healthy" ]; then
+                        echo "ERROR: $svc is not healthy."
+                        docker compose logs --tail=50 "$svc"
 
-                                echo "ERROR: $svc is not healthy."
-                                docker compose logs --tail=50 "$svc"
+                        exit 1
+                    fi
 
-                                exit 1
-                            fi
+                    echo "$svc is healthy."
 
-                            echo "$svc is healthy."
+                done
 
-                        done
+                # --------------------------------
+                # Verify running services
+                # --------------------------------
 
-                        # --------------------------------
-                        # Verify running services
-                        # --------------------------------
+                for svc in redis mailpit web; do
 
-                        for svc in redis mailpit web; do
+                    CID=$(docker compose ps -q "$svc")
 
-                            CID=$(docker compose ps -q "$svc")
+                    if [ -z "$CID" ]; then
+                        echo "ERROR: $svc container not found."
+                        exit 1
+                    fi
 
-                            if [ -z "$CID" ]; then
-                                echo "ERROR: $svc container not found."
-                                exit 1
-                            fi
+                    STATUS=$(docker inspect \
+                        -f '{{.State.Status}}' "$CID")
 
-                            STATUS=$(docker inspect \
-                                -f '{{.State.Status}}' "$CID")
+                    if [ "$STATUS" != "running" ]; then
 
-                            if [ "$STATUS" != "running" ]; then
+                        echo "ERROR: $svc is not running."
+                        docker compose logs --tail=50 "$svc"
 
-                                echo "ERROR: $svc is not running."
-                                docker compose logs --tail=50 "$svc"
+                        exit 1
+                    fi
 
-                                exit 1
-                            fi
+                    echo "$svc is running."
 
-                            echo "$svc is running."
+                done
 
-                        done
+                echo "SUCCESS: All required services verified."
 
-                        echo "SUCCESS: All required services verified."
-
-                        docker compose ps
+                docker compose ps
 
 REMOTE
-                    '''
-                }
-            }
-
-            post {
-                failure {
-                    echo 'Deployment verification failed. Check production container logs.'
-                }
-            }
+            '''
         }
     }
 
-    // ==========================================
-    // GLOBAL POST ACTIONS
-    // ==========================================
-
-    post {
-        success {
-            echo 'SUCCESS: OpsDesk images verified, deployed and checked.'
-        }
-
-        failure {
-            echo 'OPSDesk CD PIPELINE FAILED. Review the failed stage and console output.'
-        }
-
-        always {
-            echo 'OpsDesk CD pipeline execution completed.'
-        }
-    }
 }
+
+return this

@@ -19,9 +19,11 @@ def deploy() {
 
                 echo "Verifying backend image signature..."
 
+                # Cosign caches Rekor keys under HOME; / is not writable by Jenkins.
                 docker run --rm \
                     --user "$(id -u):$(id -g)" \
                     --volumes-from "${JENKINS_CONTAINER}" \
+                    -e HOME=/tmp \
                     -e DOCKER_CONFIG="${DOCKER_CONFIG}" \
                     gcr.io/projectsigstore/cosign:v2.4.1 \
                     verify \
@@ -33,6 +35,7 @@ def deploy() {
                 docker run --rm \
                     --user "$(id -u):$(id -g)" \
                     --volumes-from "${JENKINS_CONTAINER}" \
+                    -e HOME=/tmp \
                     -e DOCKER_CONFIG="${DOCKER_CONFIG}" \
                     gcr.io/projectsigstore/cosign:v2.4.1 \
                     verify \

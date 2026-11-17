@@ -231,8 +231,8 @@ pipeline {
         // ---------------------------------------------------------
         // 5. SAST SONARQUBE ANALYSIS
         // ---------------------------------------------------------
-        
-        stage('SAST SonarQube Analysis') {
+
+        stage('SAST SonarQube Analysis & Quality Gate') {
             when { branch 'Prod' }
             steps {
                 withCredentials([
@@ -285,44 +285,6 @@ pipeline {
                 }
             }
         }
-
-
-        // ---------------------------------------------------------
-        // 6. QUALITY GATE CHECK
-        // ---------------------------------------------------------
-        
-        stage('Quality Gate Check') {
-            when { branch 'Prod' }
-            steps {
-                sh '''
-                    set -e
-
-                    echo "Checking SonarQube analysis report..."
-
-                    if [ ! -s .scannerwork/report-task.txt ]; then
-                        echo "SonarQube report-task.txt is missing or empty."
-                        exit 1
-                    fi
-
-                    echo "SonarQube report-task.txt exists."
-
-                    grep -E 'ceTaskId|dashboardUrl|serverUrl' \
-                        .scannerwork/report-task.txt || true
-
-                    echo "Quality Gate polling was performed by the SonarScanner."
-                    echo "If the Quality Gate failed, the SAST stage would fail."
-                '''
-            }
-            post {
-                failure {
-                    echo 'SonarQube Quality Gate check failed.'
-                }
-                success {
-                    echo 'SonarQube Quality Gate check completed successfully.'
-                }
-            }
-        }
-
 
         // ---------------------------------------------------------
         // 7. DEPENDENCY SCAN
@@ -540,11 +502,13 @@ pipeline {
             }
         }
 
+
         // ---------------------------------------------------------
         // 11. SIGN IMAGE
         // ---------------------------------------------------------
         stage('Sign Image') {
             when { branch 'Prod' }
+
             steps {
                 withCredentials([
                     file(
@@ -556,63 +520,65 @@ pipeline {
                         variable: 'COSIGN_PASSWORD'
                     )
                 ]) {
+
                     sh '''
                         set -e
 
-                        echo "Signing OpsDesk Docker images with Cosign..."
+                        echo "Checking Jenkins identity..."
+                        id
 
-                        # Sign backend build and latest tags
-                        docker run --rm \
-                            --volumes-from "${JENKINS_CONTAINER}" \
-                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
-                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
-                            gcr.io/projectsigstore/cosign:v2.4.1 \
-                            sign --yes \
-                            --key "${COSIGN_KEY}" \
-                            "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+                        echo "Checking Cosign private key..."
+                        ls -l "${COSIGN_KEY}"
 
-                        docker run --rm \
-                            --volumes-from "${JENKINS_CONTAINER}" \
-                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
-                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
-                            gcr.io/projectsigstore/cosign:v2.4.1 \
-                            sign --yes \
-                            --key "${COSIGN_KEY}" \
-                            "${DOCKERHUB_IMAGE}:backend-latest"
+                        if [ ! -r "${COSIGN_KEY}" ]; then
+                            echo "ERROR: Cosign private key is not readable."
+                            exit 1
+                        fi
 
-                        # Sign frontend build and latest tags
-                        docker run --rm \
-                            --volumes-from "${JENKINS_CONTAINER}" \
-                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
-                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
-                            gcr.io/projectsigstore/cosign:v2.4.1 \
-                            sign --yes \
-                            --key "${COSIGN_KEY}" \
-                            "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+                        JENKINS_UID=$(id -u)
+                        JENKINS_GID=$(id -g)
 
-                        docker run --rm \
-                            --volumes-from "${JENKINS_CONTAINER}" \
-                            -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
-                            -e DOCKER_CONFIG=/var/jenkins_home/.docker \
-                            gcr.io/projectsigstore/cosign:v2.4.1 \
-                            sign --yes \
-                            --key "${COSIGN_KEY}" \
-                            "${DOCKERHUB_IMAGE}:frontend-latest"
+                        echo "Jenkins UID: ${JENKINS_UID}"
+                        echo "Jenkins GID: ${JENKINS_GID}"
+
+                        sign_image() {
+                            IMAGE="$1"
+
+                            echo "Signing: ${IMAGE}"
+
+                            docker run --rm \
+                                --user "${JENKINS_UID}:${JENKINS_GID}" \
+                                --volumes-from "${JENKINS_CONTAINER}" \
+                                -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+                                -e DOCKER_CONFIG=/var/jenkins_home/.docker \
+                                gcr.io/projectsigstore/cosign:v2.4.1 \
+                                sign --yes \
+                                --key "${COSIGN_KEY}" \
+                                "${IMAGE}"
+                        }
+
+                        sign_image "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+                        sign_image "${DOCKERHUB_IMAGE}:backend-latest"
+                        sign_image "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+                        sign_image "${DOCKERHUB_IMAGE}:frontend-latest"
 
                         echo "All OpsDesk images signed successfully."
                     '''
+
                 }
-            }
+        }
+
             post {
                 failure {
-                    echo 'Cosign image signing failed. The CI pipeline cannot be considered successful.'
+                    echo 'Cosign image signing failed. Check Jenkins key permissions and console logs.'
                 }
+
                 success {
                     echo 'OpsDesk backend and frontend Docker images signed successfully.'
                 }
             }
         }
-    }
+
 
     // -------------------------------------------------------------
     // GLOBAL POST ACTIONS

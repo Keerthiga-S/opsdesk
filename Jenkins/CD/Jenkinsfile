@@ -1,0 +1,182 @@
+
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: '',
+            description: 'Enter the successful OpsDesk CI image tag, for example 21'
+        )
+    }
+
+    environment {
+        DEPLOY_HOST = '3.7.206.60'
+        DEPLOY_USER = 'ubuntu'
+        DEPLOY_DIR  = '/var/www/opsdesk/opsdesk'
+        DOCKERHUB_IMAGE = 'iitmpravartak/opsdesk'
+        JENKINS_CONTAINER = 'jenkins'
+    }
+
+    stages {
+
+        stage('Validate Parameters') {
+            steps {
+                script {
+                    if (!params.IMAGE_TAG?.trim()) {
+                        error('IMAGE_TAG is required. Enter the successful CI build tag.')
+                    }
+
+                    if (!(params.IMAGE_TAG ==~ /^[A-Za-z0-9_.-]+$/)) {
+                        error('Invalid IMAGE_TAG format.')
+                    }
+                }
+            }
+        }
+
+        stage('Verify Image Signatures (Cosign)') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: 'cosign-public-key',
+                        variable: 'COSIGN_PUB_KEY'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Verifying OpsDesk backend image..."
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            gcr.io/projectsigstore/cosign:v2.4.1 \
+                            verify --key "${COSIGN_PUB_KEY}" \
+                            "${DOCKERHUB_IMAGE}:backend-${IMAGE_TAG}"
+
+                        echo "Verifying OpsDesk frontend image..."
+                        docker run --rm \
+                            --volumes-from "${JENKINS_CONTAINER}" \
+                            gcr.io/projectsigstore/cosign:v2.4.1 \
+                            verify --key "${COSIGN_PUB_KEY}" \
+                            "${DOCKERHUB_IMAGE}:frontend-${IMAGE_TAG}"
+
+                        echo "SUCCESS: Both image signatures verified."
+                    '''
+                }
+            }
+            post {
+                failure {
+                    echo 'CD stopped: image signature verification failed.'
+                }
+            }
+        }
+
+        stage('Deploy via Docker Compose') {
+            steps {
+                echo "Deploying OpsDesk to ${DEPLOY_HOST}..."
+
+                sshagent(['OpsDesk_Deployment_Server']) {
+                    sh '''
+                        set -e
+
+                        mkdir -p ~/.ssh
+                        chmod 700 ~/.ssh
+                        touch ~/.ssh/known_hosts
+                        chmod 600 ~/.ssh/known_hosts
+
+                        ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+
+                        ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "IMAGE_TAG='${IMAGE_TAG}' DEPLOY_DIR='${DEPLOY_DIR}' bash -s" <<'REMOTE'
+                        set -e
+
+                        cd "$DEPLOY_DIR"
+
+                        echo "Checking Docker Compose configuration..."
+                        docker compose config --quiet
+
+                        echo "Pulling verified OpsDesk images..."
+                        docker compose pull
+
+                        echo "Recreating OpsDesk containers..."
+                        docker compose up -d --remove-orphans
+
+                        echo "Removing dangling images..."
+                        docker image prune -f
+
+                        echo "Deployment commands completed."
+REMOTE
+                    '''
+                }
+            }
+            post {
+                failure {
+                    echo 'Deployment failed. Check SSH, Docker Compose and remote server logs.'
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sshagent(['OpsDesk_Deployment_Server']) {
+                    sh '''
+                        set -e
+
+                        ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "DEPLOY_DIR='${DEPLOY_DIR}' bash -s" <<'REMOTE'
+                        set -e
+
+                        cd "$DEPLOY_DIR"
+
+                        echo "========== OpsDesk Container Status =========="
+                        docker compose ps --all
+                        echo "==============================================="
+
+                        EXPECTED_SERVICES=$(docker compose config --services)
+                        RUNNING_SERVICES=$(docker compose ps --status running --services)
+
+                        FAILED_SERVICES=$(comm -23 \
+                            <(printf '%s\\n' "$EXPECTED_SERVICES" | sort) \
+                            <(printf '%s\\n' "$RUNNING_SERVICES" | sort))
+
+                        if [ -n "$FAILED_SERVICES" ]; then
+                            echo "ERROR: These services are not running:"
+                            echo "$FAILED_SERVICES"
+
+                            echo "========== Container Logs =========="
+                            docker compose logs --tail=50
+                            exit 1
+                        fi
+
+                        echo "SUCCESS: All expected OpsDesk services are running."
+REMOTE
+                    '''
+                }
+            }
+            post {
+                failure {
+                    echo 'Deployment verification failed. One or more services are not running.'
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'SUCCESS: OpsDesk images verified, deployed and checked.'
+        }
+
+        failure {
+            echo 'OPSDesk CD PIPELINE FAILED. Review the failed stage and console output.'
+        }
+
+        always {
+            echo 'OpsDesk CD pipeline execution completed.'
+        }
+    }
+}

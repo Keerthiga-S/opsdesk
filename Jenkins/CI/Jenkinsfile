@@ -503,6 +503,7 @@ pipeline {
         }
 
 
+
         // ---------------------------------------------------------
         // 11. SIGN IMAGE
         // ---------------------------------------------------------
@@ -520,7 +521,6 @@ pipeline {
                         variable: 'COSIGN_PASSWORD'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
@@ -564,9 +564,8 @@ pipeline {
 
                         echo "All OpsDesk images signed successfully."
                     '''
-
                 }
-        }
+            }
 
             post {
                 failure {
@@ -579,6 +578,7 @@ pipeline {
             }
         }
 
+    }
 
     // -------------------------------------------------------------
     // GLOBAL POST ACTIONS

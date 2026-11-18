@@ -162,27 +162,42 @@ REMOTE
 
                 echo "Checking application health..."
 
-                for svc in db api worker beat; do
+                HEALTH_DEADLINE=$(($(date +%s) + 180))
 
-                    CID=$(docker compose ps -q "$svc")
+                for svc in db api worker beat web; do
+
+                    CID=$(docker compose ps -aq "$svc")
 
                     if [ -z "$CID" ]; then
                         echo "ERROR: $svc container not found."
                         exit 1
                     fi
 
-                    HEALTH=$(docker inspect \
-                        -f '{{.State.Health.Status}}' "$CID")
+                    while :; do
+                        STATUS=$(docker inspect -f '{{.State.Status}}' "$CID")
+                        HEALTH=$(docker inspect \
+                            -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$CID")
 
-                    if [ "$HEALTH" != "healthy" ]; then
+                        if [ "$STATUS" != "running" ]; then
+                            echo "ERROR: $svc stopped (status: $STATUS)."
+                            docker compose logs --tail=50 "$svc"
+                            exit 1
+                        fi
 
-                        echo "ERROR: $svc is not healthy."
-                        docker compose logs --tail=50 "$svc"
+                        if [ "$HEALTH" = "healthy" ]; then
+                            echo "$svc is healthy."
+                            break
+                        fi
 
-                        exit 1
-                    fi
+                        if [ "$HEALTH" != "starting" ] || [ "$(date +%s)" -ge "$HEALTH_DEADLINE" ]; then
+                            echo "ERROR: $svc did not become healthy (status: $HEALTH)."
+                            docker compose logs --tail=50 "$svc"
+                            exit 1
+                        fi
 
-                    echo "$svc is healthy."
+                        echo "Waiting for $svc health check (status: $HEALTH)..."
+                        sleep 5
+                    done
 
                 done
 
@@ -190,7 +205,7 @@ REMOTE
                 # Verify running services
                 # --------------------------------
 
-                for svc in redis mailpit web; do
+                for svc in redis mailpit; do
 
                     CID=$(docker compose ps -q "$svc")
 
